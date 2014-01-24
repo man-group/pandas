@@ -26,7 +26,6 @@ from pandas import compat
 from pandas.compat import range, lrange, lmap, callable, map, zip, u
 from pandas.tseries.timedeltas import _coerce_scalar_to_timedelta_type
 
-
 class Block(PandasObject):
 
     """
@@ -274,7 +273,7 @@ class Block(PandasObject):
     def iget(self, i):
         return self.values[i]
 
-    def set(self, item, value):
+    def set(self, item, value, check=False):
         """
         Modify Block in-place with new item value
 
@@ -1354,6 +1353,26 @@ class ObjectBlock(Block):
 
         return blocks
 
+    def set(self, item, value, check=False):
+        """
+        Modify Block in-place with new item value
+
+        Returns
+        -------
+        None
+        """
+
+        loc = self.items.get_loc(item)
+
+        # GH6026
+        if check:
+            try:
+                if (self.values[loc] == value).all():
+                    return
+            except:
+                pass
+        self.values[loc] = value
+
     def _maybe_downcast(self, blocks, downcast=None):
 
         if downcast is not None:
@@ -1595,7 +1614,7 @@ class DatetimeBlock(Block):
         return self._astype(dtype, copy=copy, raise_on_error=raise_on_error,
                             klass=klass)
 
-    def set(self, item, value):
+    def set(self, item, value, check=False):
         """
         Modify Block in-place with new item value
 
@@ -1708,7 +1727,7 @@ class SparseBlock(Block):
     def post_merge(self, items, **kwargs):
         return self
 
-    def set(self, item, value):
+    def set(self, item, value, check=False):
         self.values = value
 
     def get(self, item):
@@ -2839,10 +2858,11 @@ class BlockManager(PandasObject):
         if not is_unique:
             self._consolidate_inplace()
 
-    def set(self, item, value):
+    def set(self, item, value, check=False):
         """
         Set new item in-place. Does not consolidate. Adds new Block if not
         contained in the current set of items
+        if check, then validate that we are not setting the same data in-place
         """
         if not isinstance(value, SparseArray):
             if value.ndim == self.ndim - 1:
@@ -2858,7 +2878,7 @@ class BlockManager(PandasObject):
                 self._delete_from_block(i, item)
                 self._add_new_block(item, arr, loc=None)
             else:
-                block.set(item, arr)
+                block.set(item, arr, check=check)
 
         try:
 
