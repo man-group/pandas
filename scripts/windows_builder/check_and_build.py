@@ -49,7 +49,7 @@ builds = ['26-32','26-64','27-32','27-64','33-32','33-64','34-32','34-64']
 base_dir = "C:\Users\Jeff Reback\Documents\GitHub\pandas"
 remote_host='pandas.pydata.org'
 username='pandas'
-password=############
+password="foobar placeholder"
 
 # drop python from our environment to avoid
 # passing this onto sub-processes
