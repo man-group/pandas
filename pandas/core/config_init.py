@@ -97,7 +97,6 @@ float_format_doc = """
     a string with the desired format of the number. This is used
     in some places like SeriesFormatter.
     See core.format.EngFormatter for an example.
-
 """
 
 max_colwidth_doc = """
@@ -117,6 +116,13 @@ pc_expand_repr_doc = """
     Whether to print out the full DataFrame repr for wide DataFrames across
     multiple lines, `max_columns` is still respected, but the output will
     wrap-around across multiple "pages" if it's width exceeds `display.width`.
+"""
+
+pc_show_dimensions_doc = """
+: boolean or 'truncate'
+    Whether to print out dimensions at the end of DataFrame repr.
+    If 'truncate' is specified, only print out the dimensions if the
+    frame is truncated (e.g. not display all rows and/or columns)
 """
 
 pc_line_width_doc = """
@@ -155,7 +161,6 @@ pc_chop_threshold_doc = """
 
 pc_max_seq_items = """
 : int or None
-
     when pretty-printing a long sequence, no more then `max_seq_items`
     will be printed. If items are omitted, they will be denoted by the
     addition of "..." to the resulting string.
@@ -163,19 +168,15 @@ pc_max_seq_items = """
     If set to None, the number of items to be printed is unlimited.
 """
 
-
 pc_max_info_rows_doc = """
 : int or None
-    Deprecated.
-"""
-
-pc_max_info_rows_deprecation_warning = """\
-max_info_rows has been deprecated, as reprs no longer use the info view.
+    df.info() will usually show null-counts for each column.
+    For large frames this can be quite slow. max_info_rows and max_info_cols
+    limit this null check only to frames with smaller dimensions then specified.
 """
 
 pc_large_repr_doc = """
 : 'truncate'/'info'
-
     For DataFrames exceeding max_rows/max_cols, the repr (and HTML repr) can
     show a truncated table (the default from 0.13), or switch to the view from
     df.info() (the behaviour in earlier versions of pandas).
@@ -183,7 +184,6 @@ pc_large_repr_doc = """
 
 pc_mpl_style_doc = """
 : bool
-
     Setting this to 'default' will modify the rcParams used by matplotlib
     to give plots a more pleasing visual style by default.
     Setting this to None/False restores the values to their initial value.
@@ -245,6 +245,8 @@ with cf.config_prefix('display'):
     cf.register_option('encoding', detect_console_encoding(), pc_encoding_doc,
                        validator=is_text)
     cf.register_option('expand_frame_repr', True, pc_expand_repr_doc)
+    cf.register_option('show_dimensions', 'truncate', pc_show_dimensions_doc,
+                       validator=is_one_of_factory([True, False, 'truncate']))
     cf.register_option('chop_threshold', None, pc_chop_threshold_doc)
     cf.register_option('max_seq_items', 100, pc_max_seq_items)
     cf.register_option('mpl_style', None, pc_mpl_style_doc,
@@ -265,9 +267,6 @@ cf.deprecate_option('display.line_width',
 cf.deprecate_option('display.height',
                     msg=pc_height_deprecation_warning,
                     rkey='display.max_rows')
-
-cf.deprecate_option('display.max_info_rows',
-                    msg=pc_max_info_rows_deprecation_warning)
 
 tc_sim_interactive_doc = """
 : boolean

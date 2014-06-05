@@ -93,7 +93,7 @@ unlike the axis labels, cannot be assigned to.
 Accelerated operations
 ----------------------
 
-Pandas has support for accelerating certain types of binary numerical and boolean operations using
+pandas has support for accelerating certain types of binary numerical and boolean operations using
 the ``numexpr`` library (starting in 0.11.0) and the ``bottleneck`` libraries.
 
 These libraries are especially useful when dealing with large data sets, and provide large
@@ -104,8 +104,8 @@ a set of specialized cython routines that are especially fast when dealing with 
 Here is a sample (using 100 column x 100,000 row ``DataFrames``):
 
 .. csv-table::
-    :header: "Operation", "0.11.0 (ms)", "Prior Vern (ms)", "Ratio to Prior"
-    :widths: 30, 30, 30, 30
+    :header: "Operation", "0.11.0 (ms)", "Prior Version (ms)", "Ratio to Prior"
+    :widths: 25, 25, 25, 25
     :delim: ;
 
     ``df1 > df2``; 13.32; 125.35;  0.1063
@@ -140,10 +140,9 @@ either match on the *index* or *columns* via the **axis** keyword:
 
 .. ipython:: python
 
-   d = {'one' : Series(randn(3), index=['a', 'b', 'c']),
-        'two' : Series(randn(4), index=['a', 'b', 'c', 'd']),
-        'three' : Series(randn(3), index=['b', 'c', 'd'])}
-   df = df_orig = DataFrame(d)
+   df = DataFrame({'one' : Series(randn(3), index=['a', 'b', 'c']),
+                   'two' : Series(randn(4), index=['a', 'b', 'c', 'd']),
+                   'three' : Series(randn(3), index=['b', 'c', 'd'])})
    df
    row = df.ix[1]
    column = df['two']
@@ -153,6 +152,20 @@ either match on the *index* or *columns* via the **axis** keyword:
 
    df.sub(column, axis='index')
    df.sub(column, axis=0)
+
+.. ipython:: python
+   :suppress:
+
+   df_orig = df
+
+Furthermore you can align a level of a multi-indexed DataFrame with a Series.
+
+.. ipython:: python
+
+   dfmi = df.copy()
+   dfmi.index = MultiIndex.from_tuples([(1,'a'),(1,'b'),(1,'c'),(2,'a')],
+                                       names=['first','second'])
+   dfmi.sub(column, axis=0, level='second')
 
 With Panel, describing the matching behavior is a bit more difficult, so
 the arithmetic methods instead (and perhaps confusingly?) give you the option
@@ -272,6 +285,37 @@ To evaluate single-element pandas objects in a boolean context, use the method `
        ValueError: The truth value of an array is ambiguous. Use a.empty, a.any() or a.all().
 
 See :ref:`gotchas<gotchas.truth>` for a more detailed discussion.
+
+.. _basics.equals:
+
+Comparing if objects are equivalent
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Often you may find there is more than one way to compute the same
+result.  As a simple example, consider ``df+df`` and ``df*2``. To test
+that these two computations produce the same result, given the tools
+shown above, you might imagine using ``(df+df == df*2).all()``. But in
+fact, this expression is False:
+
+.. ipython:: python
+
+   df+df == df*2
+   (df+df == df*2).all()
+
+Notice that the boolean DataFrame ``df+df == df*2`` contains some False values!
+That is because NaNs do not compare as equals:
+
+.. ipython:: python
+
+   np.nan == np.nan
+
+So, as of v0.13.1, NDFrames (such as Series, DataFrames, and Panels)
+have an ``equals`` method for testing equality, with NaNs in corresponding
+locations treated as equal.
+
+.. ipython:: python
+
+   (df+df).equals(df*2)
 
 
 Combining overlapping data sets
@@ -410,6 +454,7 @@ non-null values:
    series[10:20]  = 5
    series.nunique()
 
+.. _basics.describe:
 
 Summarizing data: describe
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -427,7 +472,13 @@ course):
     frame.ix[::2] = np.nan
     frame.describe()
 
-.. _basics.describe:
+You can select specific percentiles to include in the output:
+
+.. ipython:: python
+
+    series.describe(percentiles=[.05, .25, .75, .95])
+
+By default, the median is always included.
 
 For a non-numerical Series object, `describe` will give a simple summary of the
 number of unique values and most frequently occurring values:
@@ -437,6 +488,7 @@ number of unique values and most frequently occurring values:
 
    s = Series(['a', 'a', 'b', 'b', 'a', 'a', np.nan, 'c', 'd', 'a'])
    s.describe()
+
 
 There also is a utility function, ``value_range`` which takes a DataFrame and
 returns a series with the minimum/maximum values in the DataFrame.
@@ -489,7 +541,7 @@ of a 1D array of values. It can also be used as a function on regular arrays:
    s.value_counts()
    value_counts(data)
 
-Similarly, you can get the most frequently occuring value(s) (the mode) of the values in a Series or DataFrame:
+Similarly, you can get the most frequently occurring value(s) (the mode) of the values in a Series or DataFrame:
 
 .. ipython:: python
 
@@ -637,7 +689,86 @@ to :ref:`merging/joining functionality <merging>`:
    s
    s.map(t)
 
+
+.. _basics.apply_panel:
+
+Applying with a Panel
+~~~~~~~~~~~~~~~~~~~~~
+
+Applying with a ``Panel`` will pass a ``Series`` to the applied function. If the applied
+function returns a ``Series``, the result of the application will be a ``Panel``. If the applied function
+reduces to a scalar, the result of the application will be a ``DataFrame``.
+
+.. note::
+
+   Prior to 0.13.1 ``apply`` on a ``Panel`` would only work on ``ufuncs`` (e.g. ``np.sum/np.max``).
+
+.. ipython:: python
+
+   import pandas.util.testing as tm
+   panel = tm.makePanel(5)
+   panel
+   panel['ItemA']
+
+A transformational apply.
+
+.. ipython:: python
+
+   result = panel.apply(lambda x: x*2, axis='items')
+   result
+   result['ItemA']
+
+A reduction operation.
+
+.. ipython:: python
+
+   panel.apply(lambda x: x.dtype, axis='items')
+
+A similar reduction type operation
+
+.. ipython:: python
+
+   panel.apply(lambda x: x.sum(), axis='major_axis')
+
+This last reduction is equivalent to
+
+.. ipython:: python
+
+   panel.sum('major_axis')
+
+A transformation operation that returns a ``Panel``, but is computing
+the z-score across the ``major_axis``.
+
+.. ipython:: python
+
+   result = panel.apply(
+              lambda x: (x-x.mean())/x.std(),
+              axis='major_axis')
+   result
+   result['ItemA']
+
+Apply can also accept multiple axes in the ``axis`` argument. This will pass a
+``DataFrame`` of the cross-section to the applied function.
+
+.. ipython:: python
+
+   f = lambda x: ((x.T-x.mean(1))/x.std(1)).T
+
+   result = panel.apply(f, axis = ['items','major_axis'])
+   result
+   result.loc[:,:,'ItemA']
+
+This is equivalent to the following
+
+.. ipython:: python
+
+   result = Panel(dict([ (ax,f(panel.loc[:,:,ax]))
+                           for ax in panel.minor_axis ]))
+   result
+   result.loc[:,:,'ItemA']
+
 .. _basics.reindexing:
+
 
 Reindexing and altering labels
 ------------------------------
@@ -700,7 +831,7 @@ DataFrame's index.
     pre-aligned data**. Adding two unaligned DataFrames internally triggers a
     reindexing step. For exploratory analysis you will hardly notice the
     difference (because ``reindex`` has been heavily optimized), but when CPU
-    cycles matter sprinking a few explicit ``reindex`` calls here and there can
+    cycles matter sprinkling a few explicit ``reindex`` calls here and there can
     have an impact.
 
 .. _basics.reindex_like:
@@ -930,7 +1061,7 @@ containing the data in each row:
       ...:     print('%s\n%s' % (row_index, row))
       ...:
 
-For instance, a contrived way to transpose the dataframe would be:
+For instance, a contrived way to transpose the DataFrame would be:
 
 .. ipython:: python
 
@@ -1029,10 +1160,13 @@ with more than one group returns a DataFrame with one column per group.
 
    Series(['a1', 'b2', 'c3']).str.extract('([ab])(\d)')
 
-Elements that do not match return a row of ``NaN``s.
+Elements that do not match return a row filled with ``NaN``.
 Thus, a Series of messy strings can be "converted" into a
 like-indexed Series or DataFrame of cleaned-up or more useful strings,
 without necessitating ``get()`` to access tuples or ``re.match`` objects.
+
+The results dtype always is object, even if no match is found and the result
+only contains ``NaN``.
 
 Named groups like
 
@@ -1051,21 +1185,37 @@ can also be used.
 Testing for Strings that Match or Contain a Pattern
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-In previous versions, *extracting* match groups was accomplished by ``match``,
-which returned a not-so-convenient Series of tuples. Starting in version 0.14,
-the default behavior of match will change. It will return a boolean
-indexer, analagous to the method ``contains``.
+You can check whether elements contain a pattern:
 
-The distinction between
-``match`` and ``contains`` is strictness: ``match`` relies on
-strict ``re.match`` while ``contains`` relies on ``re.search``.
+.. ipython:: python
 
-In version 0.13, ``match`` performs its old, deprecated behavior by default,
-but the new behavior is availabe through the keyword argument
-``as_indexer=True``.
+   pattern = r'[a-z][0-9]'
+   Series(['1', '2', '3a', '3b', '03c']).str.contains(pattern)
+
+or match a pattern:
+
+
+.. ipython:: python
+
+   Series(['1', '2', '3a', '3b', '03c']).str.match(pattern, as_indexer=True)
+
+The distinction between ``match`` and ``contains`` is strictness: ``match``
+relies on strict ``re.match``, while ``contains`` relies on ``re.search``.
+
+.. warning::
+
+   In previous versions, ``match`` was for *extracting* groups,
+   returning a not-so-convenient Series of tuples. The new method ``extract``
+   (described in the previous section) is now preferred.
+
+   This old, deprecated behavior of ``match`` is still the default. As
+   demonstrated above, use the new behavior by setting ``as_indexer=True``.
+   In this mode, ``match`` is analogous to ``contains``, returning a boolean
+   Series. The new behavior will become the default behavior in a future
+   release.
 
 Methods like ``match``, ``contains``, ``startswith``, and ``endswith`` take
- an extra ``na`` arguement so missing values can be considered True or False:
+ an extra ``na`` argument so missing values can be considered True or False:
 
 .. ipython:: python
 
@@ -1085,11 +1235,12 @@ Methods like ``match``, ``contains``, ``startswith``, and ``endswith`` take
     ``repeat``,Duplicate values (``s.str.repeat(3)`` equivalent to ``x * 3``)
     ``pad``,"Add whitespace to left, right, or both sides of strings"
     ``center``,Equivalent to ``pad(side='both')``
+    ``wrap``,Split long strings into lines with length less than a given width
     ``slice``,Slice each string in the Series
     ``slice_replace``,Replace slice in each string with passed value
     ``count``,Count occurrences of pattern
     ``startswith``,Equivalent to ``str.startswith(pat)`` for each element
-    ``endswidth``,Equivalent to ``str.endswith(pat)`` for each element
+    ``endswith``,Equivalent to ``str.endswith(pat)`` for each element
     ``findall``,Compute list of all occurrences of pattern/regex for each string
     ``match``,"Call ``re.match`` on each element, returning matched groups as list"
     ``extract``,"Call ``re.match`` on each element, as ``match`` does, but return matched groups as strings for convenience."
@@ -1099,6 +1250,20 @@ Methods like ``match``, ``contains``, ``startswith``, and ``endswith`` take
     ``lstrip``,Equivalent to ``str.lstrip``
     ``lower``,Equivalent to ``str.lower``
     ``upper``,Equivalent to ``str.upper``
+
+
+Getting indicator variables from seperated strings
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+You can extract dummy variables from string columns.
+For example if they are seperated by a ``'|'``:
+
+  .. ipython:: python
+
+      s = pd.Series(['a', 'a|b', np.nan, 'a|c'])
+      s.str.get_dummies(sep='|')
+
+See also :func:`~pandas.get_dummies`.
 
 .. _basics.sorting:
 
@@ -1134,23 +1299,54 @@ The ``by`` argument can take a list of column names, e.g.:
 
 Series has the method ``order`` (analogous to `R's order function
 <http://stat.ethz.ch/R-manual/R-patched/library/base/html/order.html>`__) which
-sorts by value, with special treatment of NA values via the ``na_last``
+sorts by value, with special treatment of NA values via the ``na_position``
 argument:
 
 .. ipython:: python
 
    s[2] = np.nan
    s.order()
-   s.order(na_last=False)
+   s.order(na_position='first')
 
-Some other sorting notes / nuances:
+.. note::
 
-  * ``Series.sort`` sorts a Series by value in-place. This is to provide
-    compatibility with NumPy methods which expect the ``ndarray.sort``
-    behavior.
-  * ``DataFrame.sort`` takes a ``column`` argument instead of ``by``. This
-    method will likely be deprecated in a future release in favor of just using
-    ``sort_index``.
+   ``Series.sort`` sorts a Series by value in-place. This is to provide
+   compatibility with NumPy methods which expect the ``ndarray.sort``
+   behavior. ``Series.order`` returns a copy of the sorted data.
+
+.. _basics.nsorted:
+
+smallest / largest values
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. versionadded:: 0.14.0
+
+``Series`` has the ``nsmallest`` and ``nlargest`` methods which return the
+smallest or largest :math:`n` values. For a large ``Series`` this can be much
+faster than sorting the entire Series and calling ``head(n)`` on the result.
+
+.. ipython:: python
+
+   s = Series(np.random.permutation(10))
+   s
+   s.order()
+   s.nsmallest(3)
+   s.nlargest(3)
+
+
+.. _basics.multi-index_sorting:
+
+Sorting by a multi-index column
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+You must be explicit about sorting when the column is a multi-index, and fully specify
+all levels to ``by``.
+
+.. ipython:: python
+
+   df1.columns = MultiIndex.from_tuples([('a','one'),('a','two'),('b','three')])
+   df1.sort_index(by=('a','two'))
+
 
 Copying
 -------
@@ -1264,7 +1460,7 @@ from the current type (say ``int`` to ``float``)
    df3.dtypes
 
 The ``values`` attribute on a DataFrame return the *lower-common-denominator* of the dtypes, meaning
-the dtype that can accomodate **ALL** of the types in the resulting homogenous dtyped numpy array. This can
+the dtype that can accommodate **ALL** of the types in the resulting homogenous dtyped numpy array. This can
 force some *upcasting*.
 
 .. ipython:: python
@@ -1276,7 +1472,7 @@ astype
 
 .. _basics.cast:
 
-You can use the ``astype`` method to explicity convert dtypes from one to another. These will by default return a copy,
+You can use the ``astype`` method to explicitly convert dtypes from one to another. These will by default return a copy,
 even if the dtype was unchanged (pass ``copy=False`` to change this behavior). In addition, they will raise an
 exception if the astype operation is invalid.
 
@@ -1311,7 +1507,7 @@ they will be set to ``np.nan``.
    df3.dtypes
 
 To force conversion to ``datetime64[ns]``, pass ``convert_dates='coerce'``.
-This will convert any datetimelike object to dates, forcing other values to ``NaT``.
+This will convert any datetime-like object to dates, forcing other values to ``NaT``.
 This might be useful if you are reading in data which is mostly dates,
 but occasionally has non-dates intermixed and you want to represent as missing.
 
@@ -1363,7 +1559,7 @@ Working with package options
 .. _basics.working_with_options:
 .. versionadded:: 0.10.1
 
-Pandas has an options system that let's you customize some aspects of it's behaviour,
+pandas has an options system that let's you customize some aspects of it's behaviour,
 display-related options being those the user is must likely to adjust.
 
 Options have a full "dotted-style", case-insensitive name (e.g. ``display.max_rows``),
@@ -1457,6 +1653,21 @@ It's also possible to reset multiple options at once (using a regex):
    reset_option("^display")
 
 
+.. versionadded:: 0.13.1
+
+   Beginning with v0.13.1 the `option_context` context manager has been exposed through
+   the top-level API, allowing you to execute code with given option values. Option values
+   are restored automatically when you exit the `with` block:
+
+.. ipython:: python
+
+   with option_context("display.max_rows",10,"display.max_columns", 5):
+      print get_option("display.max_rows")
+      print get_option("display.max_columns")
+
+   print get_option("display.max_rows")
+   print get_option("display.max_columns")
+
 
 Console Output Formatting
 -------------------------
@@ -1483,7 +1694,7 @@ For instance:
 
 
 The ``set_printoptions`` function has a number of options for controlling how
-floating point numbers are formatted (using hte ``precision`` argument) in the
+floating point numbers are formatted (using the ``precision`` argument) in the
 console and . The ``max_rows`` and ``max_columns`` control how many rows and
 columns of DataFrame objects are shown by default. If ``max_columns`` is set to
 0 (the default, in fact), the library will attempt to fit the DataFrame's

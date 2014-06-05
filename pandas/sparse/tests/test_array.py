@@ -51,22 +51,22 @@ class TestSparseArray(tm.TestCase):
 
     def test_constructor_from_sparse(self):
         res = SparseArray(self.zarr)
-        self.assertEquals(res.fill_value, 0)
+        self.assertEqual(res.fill_value, 0)
         assert_almost_equal(res.sp_values, self.zarr.sp_values)
 
     def test_constructor_copy(self):
         cp = SparseArray(self.arr, copy=True)
         cp.sp_values[:3] = 0
-        self.assert_(not (self.arr.sp_values[:3] == 0).any())
+        self.assertFalse((self.arr.sp_values[:3] == 0).any())
 
         not_copy = SparseArray(self.arr)
         not_copy.sp_values[:3] = 0
-        self.assert_((self.arr.sp_values[:3] == 0).all())
+        self.assertTrue((self.arr.sp_values[:3] == 0).all())
 
     def test_astype(self):
         res = self.arr.astype('f8')
         res.sp_values[:3] = 27
-        self.assert_(not (self.arr.sp_values[:3] == 27).any())
+        self.assertFalse((self.arr.sp_values[:3] == 27).any())
 
         assertRaisesRegexp(TypeError, "floating point", self.arr.astype, 'i8')
 

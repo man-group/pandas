@@ -12,6 +12,7 @@ import os
 import subprocess
 import locale
 import unittest
+import traceback
 
 from datetime import datetime
 from functools import wraps, partial
@@ -22,7 +23,7 @@ from numpy.random import randn, rand
 import numpy as np
 
 import pandas as pd
-from pandas.core.common import isnull, _is_sequence
+from pandas.core.common import _is_sequence
 import pandas.core.index as index
 import pandas.core.series as series
 import pandas.core.frame as frame
@@ -33,6 +34,8 @@ from pandas.compat import(
     filter, map, zip, range, unichr, lrange, lmap, lzip, u, callable, Counter,
     raise_with_traceback, httplib
 )
+
+from pandas.computation import expressions as expr
 
 from pandas import bdate_range
 from pandas.tseries.index import DatetimeIndex
@@ -53,17 +56,83 @@ N = 30
 K = 4
 _RAISE_NETWORK_ERROR_DEFAULT = False
 
+# set testing_mode
+def set_testing_mode():
+    # set the testing mode filters
+    testing_mode = os.environ.get('PANDAS_TESTING_MODE','None')
+    if 'deprecate' in testing_mode:
+        warnings.simplefilter('always', DeprecationWarning)
+
+def reset_testing_mode():
+    # reset the testing mode filters
+    testing_mode = os.environ.get('PANDAS_TESTING_MODE','None')
+    if 'deprecate' in testing_mode:
+        warnings.simplefilter('ignore', DeprecationWarning)
+
+set_testing_mode()
+
 class TestCase(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
         pd.set_option('chained_assignment','raise')
-        #print("setting up: {0}".format(cls))
 
     @classmethod
     def tearDownClass(cls):
-        #print("tearing down up: {0}".format(cls))
         pass
+
+    def reset_display_options(self):
+        # reset the display options
+        pd.reset_option('^display.',silent=True)
+
+    def assert_numpy_array_equal(self, np_array, assert_equal):
+        if np.array_equal(np_array, assert_equal):
+	        return
+        raise AssertionError('{0} is not equal to {1}.'.format(np_array, assert_equal))
+
+    def assertIs(self, first, second, msg=''):
+        """Checks that 'first' is 'second'"""
+        a, b = first, second
+        assert a is b, "%s: %r is not %r" % (msg.format(a,b), a, b)
+
+    def assertIsNot(self, first, second, msg=''):
+        """Checks that 'first' is not 'second'"""
+        a, b = first, second
+        assert a is not b, "%s: %r is %r" % (msg.format(a,b), a, b)
+
+    def assertIsNone(self, expr, msg=''):
+        """Checks that 'expr' is None"""
+        self.assertIs(expr, None, msg)
+
+    def assertIsNotNone(self, expr, msg=''):
+        """Checks that 'expr' is not None"""
+        self.assertIsNot(expr, None, msg)
+
+    def assertIn(self, first, second, msg=''):
+        """Checks that 'first' is in 'second'"""
+        a, b = first, second
+        assert a in b, "%s: %r is not in %r" % (msg.format(a,b), a, b)
+
+    def assertNotIn(self, first, second, msg=''):
+        """Checks that 'first' is not in 'second'"""
+        a, b = first, second
+        assert a not in b, "%s: %r is in %r" % (msg.format(a,b), a, b)
+
+    def assertIsInstance(self, obj, cls, msg=''):
+        """Test that obj is an instance of cls
+        (which can be a class or a tuple of classes,
+        as supported by isinstance())."""
+        assert isinstance(obj, cls), (
+            "%sExpected object to be of type %r, found %r instead" % (
+                msg, cls, type(obj)))
+
+    def assertNotIsInstance(self, obj, cls, msg=''):
+        """Test that obj is not an instance of cls
+        (which can be a class or a tuple of classes,
+        as supported by isinstance())."""
+        assert not isinstance(obj, cls), (
+            "%sExpected object to be of type %r, found %r instead" % (
+                msg, cls, type(obj)))
 
 # NOTE: don't pass an NDFrame or index to this function - may not handle it
 # well.
@@ -201,14 +270,23 @@ def get_locales(prefix=None, normalize=True,
         return None
 
     try:
-        raw_locales = str(raw_locales, encoding=pd.options.display.encoding)
+        # raw_locales is "\n" seperated list of locales
+        # it may contain non-decodable parts, so split
+        # extract what we can and then rejoin.
+        locales = raw_locales.split(b'\n')
+        raw_locales = []
+        for x in raw_locales:
+            try:
+                raw_locales.append(str(x, encoding=pd.options.display.encoding))
+            except:
+                pass
     except TypeError:
         pass
 
     if prefix is None:
-        return _valid_locales(raw_locales.splitlines(), normalize)
+        return _valid_locales(raw_locales, normalize)
 
-    found = re.compile('%s.*' % prefix).findall(raw_locales)
+    found = re.compile('%s.*' % prefix).findall('\n'.join(raw_locales))
     return _valid_locales(found, normalize)
 
 
@@ -436,15 +514,22 @@ def isiterable(obj):
 def is_sorted(seq):
     return assert_almost_equal(seq, np.sort(np.array(seq)))
 
+# This could be refactored to use the NDFrame.equals method
 def assert_series_equal(left, right, check_dtype=True,
                         check_index_type=False,
                         check_series_type=False,
-                        check_less_precise=False):
+                        check_less_precise=False,
+                        check_exact=False):
     if check_series_type:
         assert_isinstance(left, type(right))
     if check_dtype:
         assert_attr_equal('dtype', left, right)
-    assert_almost_equal(left.values, right.values, check_less_precise)
+    if check_exact:
+        if not np.array_equal(left.values, right.values):
+            raise AssertionError('{0} is not equal to {1}.'.format(left.values,
+                                                                   right.values))
+    else:
+        assert_almost_equal(left.values, right.values, check_less_precise)
     if check_less_precise:
         assert_almost_equal(
             left.index.values, right.index.values, check_less_precise)
@@ -455,14 +540,15 @@ def assert_series_equal(left, right, check_dtype=True,
         assert_attr_equal('dtype', left.index, right.index)
         assert_attr_equal('inferred_type', left.index, right.index)
 
-
+# This could be refactored to use the NDFrame.equals method
 def assert_frame_equal(left, right, check_dtype=True,
                        check_index_type=False,
                        check_column_type=False,
                        check_frame_type=False,
                        check_less_precise=False,
                        check_names=True,
-                       by_blocks=False):
+                       by_blocks=False,
+                       check_exact=False):
     if check_frame_type:
         assert_isinstance(left, type(right))
     assert_isinstance(left, DataFrame)
@@ -495,7 +581,8 @@ def assert_frame_equal(left, right, check_dtype=True,
             assert_series_equal(lcol, rcol,
                                 check_dtype=check_dtype,
                                 check_index_type=check_index_type,
-                                check_less_precise=check_less_precise)
+                                check_less_precise=check_less_precise,
+                                check_exact=check_exact)
 
     if check_index_type:
         assert_isinstance(left.index, type(right.index))
@@ -582,9 +669,9 @@ def makeFloatIndex(k=10):
     return Index(values * (10 ** np.random.randint(0, 9)))
 
 
-def makeDateIndex(k=10):
+def makeDateIndex(k=10, freq='B'):
     dt = datetime(2000, 1, 1)
-    dr = bdate_range(dt, periods=k)
+    dr = bdate_range(dt, periods=k, freq=freq)
     return DatetimeIndex(dr)
 
 
@@ -617,10 +704,10 @@ def getSeriesData():
     return dict((c, Series(randn(N), index=index)) for c in getCols(K))
 
 
-def makeTimeSeries(nper=None):
+def makeTimeSeries(nper=None, freq='B'):
     if nper is None:
         nper = N
-    return Series(randn(nper), index=makeDateIndex(nper))
+    return Series(randn(nper), index=makeDateIndex(nper, freq=freq))
 
 
 def makePeriodSeries(nper=None):
@@ -629,16 +716,16 @@ def makePeriodSeries(nper=None):
     return Series(randn(nper), index=makePeriodIndex(nper))
 
 
-def getTimeSeriesData(nper=None):
-    return dict((c, makeTimeSeries(nper)) for c in getCols(K))
+def getTimeSeriesData(nper=None, freq='B'):
+    return dict((c, makeTimeSeries(nper, freq)) for c in getCols(K))
 
 
 def getPeriodData(nper=None):
     return dict((c, makePeriodSeries(nper)) for c in getCols(K))
 
 # make frame
-def makeTimeDataFrame(nper=None):
-    data = getTimeSeriesData(nper)
+def makeTimeDataFrame(nper=None, freq='B'):
+    data = getTimeSeriesData(nper, freq)
     return DataFrame(data)
 
 
@@ -851,6 +938,72 @@ def makeCustomDataframe(nrows, ncols, c_idx_names=True, r_idx_names=True,
     return DataFrame(data, index, columns, dtype=dtype)
 
 
+def _create_missing_idx(nrows, ncols, density, random_state=None):
+    if random_state is None:
+        random_state = np.random
+    else:
+        random_state = np.random.RandomState(random_state)
+
+    # below is cribbed from scipy.sparse
+    size = int(np.round((1 - density) * nrows * ncols))
+    # generate a few more to ensure unique values
+    min_rows = 5
+    fac = 1.02
+    extra_size = min(size + min_rows, fac * size)
+
+    def _gen_unique_rand(rng, _extra_size):
+        ind = rng.rand(int(_extra_size))
+        return np.unique(np.floor(ind * nrows * ncols))[:size]
+
+    ind = _gen_unique_rand(random_state, extra_size)
+    while ind.size < size:
+        extra_size *= 1.05
+        ind = _gen_unique_rand(random_state, extra_size)
+
+    j = np.floor(ind * 1. / nrows).astype(int)
+    i = (ind - j * nrows).astype(int)
+    return i.tolist(), j.tolist()
+
+
+def makeMissingCustomDataframe(nrows, ncols, density=.9, random_state=None,
+                               c_idx_names=True, r_idx_names=True,
+                               c_idx_nlevels=1, r_idx_nlevels=1,
+                               data_gen_f=None,
+                               c_ndupe_l=None, r_ndupe_l=None, dtype=None,
+                               c_idx_type=None, r_idx_type=None):
+    """
+    Parameters
+    ----------
+    Density : float, optional
+        Float in (0, 1) that gives the percentage of non-missing numbers in
+        the DataFrame.
+    random_state : {np.random.RandomState, int}, optional
+        Random number generator or random seed.
+
+    See makeCustomDataframe for descriptions of the rest of the parameters.
+    """
+    df = makeCustomDataframe(nrows, ncols, c_idx_names=c_idx_names,
+                             r_idx_names=r_idx_names,
+                             c_idx_nlevels=c_idx_nlevels,
+                             r_idx_nlevels=r_idx_nlevels,
+                             data_gen_f=data_gen_f,
+                             c_ndupe_l=c_ndupe_l, r_ndupe_l=r_ndupe_l,
+                             dtype=dtype, c_idx_type=c_idx_type,
+                             r_idx_type=r_idx_type)
+
+    i, j = _create_missing_idx(nrows, ncols, density, random_state)
+    df.values[i, j] = np.nan
+    return df
+
+
+def makeMissingDataframe(density=.9, random_state=None):
+    df = makeDataFrame()
+    i, j = _create_missing_idx(*df.shape, density=density,
+                               random_state=random_state)
+    df.values[i, j] = np.nan
+    return df
+
+
 def add_nans(panel):
     I, J, N = panel.shape
     for i, item in enumerate(panel.items):
@@ -966,109 +1119,40 @@ def optional_args(decorator):
 
     return wrapper
 
+# skip tests on exceptions with this message
+_network_error_messages = (
+    # 'urlopen error timed out',
+    # 'timeout: timed out',
+    # 'socket.timeout: timed out',
+    'timed out',
+    'Server Hangup',
+    'HTTP Error 503: Service Unavailable',
+    '502: Proxy Error',
+    'HTTP Error 502: internal error',
+    'HTTP Error 502',
+    'HTTP Error 503',
+    'HTTP Error 403',
+    )
 
-_network_error_classes = IOError, httplib.HTTPException
+# or this e.errno/e.reason.errno
+_network_errno_vals = (
+    101, # Network is unreachable
+    110, # Connection timed out
+    104, # Connection reset Error
+    54,  # Connection reset by peer
+    60,  # urllib.error.URLError: [Errno 60] Connection timed out
+    )
 
+# Both of the above shouldn't mask real issues such as 404's
+# or refused connections (changed DNS).
+# But some tests (test_data yahoo) contact incredibly flakey
+# servers.
 
-@optional_args
-def network(t, raise_on_error=_RAISE_NETWORK_ERROR_DEFAULT,
-            error_classes=_network_error_classes, num_runs=2):
-    """
-    Label a test as requiring network connection and skip test if it encounters a ``URLError``.
+# and conditionally raise on these exception types
+_network_error_classes = (IOError, httplib.HTTPException)
 
-    In some cases it is not possible to assume network presence (e.g. Debian
-    build hosts).
-
-    You can pass an optional ``raise_on_error`` argument to the decorator, in
-    which case it will always raise an error even if it's not a subclass of
-    ``error_classes``.
-
-    Parameters
-    ----------
-    t : callable
-        The test requiring network connectivity.
-    raise_on_error : bool, optional
-        If True, never catches errors.
-    error_classes : tuple, optional
-        error classes to ignore. If not in ``error_classes``, raises the error.
-        defaults to URLError. Be careful about changing the error classes here,
-        it may result in undefined behavior.
-    num_runs : int, optional
-        Number of times to run test. If fails on last try, will raise. Default
-        is 2 runs.
-
-    Returns
-    -------
-    t : callable
-        The decorated test `t`.
-
-    Examples
-    --------
-    A test can be decorated as requiring network like this::
-
-      >>> from pandas.util.testing import network
-      >>> from pandas.io.common import urlopen
-      >>> import nose
-      >>> @network
-      ... def test_network():
-      ...     with urlopen("rabbit://bonanza.com") as f:
-      ...         pass
-      ...
-      >>> try:
-      ...     test_network()
-      ... except nose.SkipTest:
-      ...     print("SKIPPING!")
-      ...
-      SKIPPING!
-
-    Alternatively, you can use set ``raise_on_error`` in order to get
-    the error to bubble up, e.g.::
-
-      >>> @network(raise_on_error=True)
-      ... def test_network():
-      ...     with urlopen("complaint://deadparrot.com") as f:
-      ...         pass
-      ...
-      >>> test_network()
-      Traceback (most recent call last):
-        ...
-      URLError: <urlopen error unknown url type: complaint>
-
-    And use ``nosetests -a '!network'`` to exclude running tests requiring
-    network connectivity. ``_RAISE_NETWORK_ERROR_DEFAULT`` in
-    ``pandas/util/testing.py`` sets the default behavior (currently False).
-    """
-    from nose import SkipTest
-
-    if num_runs < 1:
-        raise ValueError("Must set at least 1 run")
-    t.network = True
-
-    @wraps(t)
-    def network_wrapper(*args, **kwargs):
-        if raise_on_error:
-            return t(*args, **kwargs)
-        else:
-            runs = 0
-
-            for _ in range(num_runs):
-                try:
-                    try:
-                        return t(*args, **kwargs)
-                    except error_classes as e:
-                        raise SkipTest("Skipping test %s" % e)
-                except SkipTest:
-                    raise
-                except Exception as e:
-                    if runs < num_runs - 1:
-                        print("Failed: %r" % e)
-                    else:
-                        raise
-
-                runs += 1
-
-    return network_wrapper
-
+if sys.version_info[:2] >= (3,3):
+    _network_error_classes += (TimeoutError,)
 
 def can_connect(url, error_classes=_network_error_classes):
     """Try to connect to the given url. True if succeeds, False if IOError
@@ -1095,10 +1179,13 @@ def can_connect(url, error_classes=_network_error_classes):
 
 
 @optional_args
-def with_connectivity_check(t, url="http://www.google.com",
-                            raise_on_error=_RAISE_NETWORK_ERROR_DEFAULT,
-                            check_before_test=False,
-                            error_classes=_network_error_classes):
+def network(t, url="http://www.google.com",
+            raise_on_error=_RAISE_NETWORK_ERROR_DEFAULT,
+            check_before_test=False,
+            error_classes=_network_error_classes,
+            skip_errnos=_network_errno_vals,
+            _skip_on_messages=_network_error_messages,
+            ):
     """
     Label a test as requiring network connection and, if an error is
     encountered, only raise if it does not find a network connection.
@@ -1124,6 +1211,14 @@ def with_connectivity_check(t, url="http://www.google.com",
     error_classes : tuple or Exception
         error classes to ignore. If not in ``error_classes``, raises the error.
         defaults to IOError. Be careful about changing the error classes here.
+    skip_errnos : iterable of int
+        Any exception that has .errno or .reason.erno set to one
+        of these values will be skipped with an appropriate
+        message.
+    _skip_on_messages: iterable of string
+        any exception e for which one of the strings is
+        a substring of str(e) will be skipped with an appropriate
+        message. Intended to supress errors where an errno isn't available.
 
     Notes
     -----
@@ -1137,9 +1232,22 @@ def with_connectivity_check(t, url="http://www.google.com",
     Example
     -------
 
-    In this example, you see how it will raise the error if it can connect to
-    the url::
-        >>> @with_connectivity_check("http://www.yahoo.com")
+    Tests decorated with @network will fail if it's possible to make a network
+    connection to another URL (defaults to google.com)::
+
+      >>> from pandas.util.testing import network
+      >>> from pandas.io.common import urlopen
+      >>> @network
+      ... def test_network():
+      ...     with urlopen("rabbit://bonanza.com"):
+      ...         pass
+      Traceback
+         ...
+      URLError: <urlopen error unknown url type: rabit>
+
+      You can specify alternative URLs::
+
+        >>> @network("http://www.yahoo.com")
         ... def test_something_with_yahoo():
         ...    raise IOError("Failure Message")
         >>> test_something_with_yahoo()
@@ -1147,8 +1255,10 @@ def with_connectivity_check(t, url="http://www.google.com",
             ...
         IOError: Failure Message
 
-    I you set check_before_test, it will check the url first and not run the test on failure::
-        >>> @with_connectivity_check("failing://url.blaher", check_before_test=True)
+    If you set check_before_test, it will check the url first and not run the
+    test on failure::
+
+        >>> @network("failing://url.blaher", check_before_test=True)
         ... def test_something():
         ...     print("I ran!")
         ...     raise ValueError("Failure")
@@ -1156,6 +1266,8 @@ def with_connectivity_check(t, url="http://www.google.com",
         Traceback (most recent call last):
             ...
         SkipTest
+
+    Errors not related to networking will always be raised.
     """
     from nose import SkipTest
     t.network = True
@@ -1167,7 +1279,27 @@ def with_connectivity_check(t, url="http://www.google.com",
                 raise SkipTest
         try:
             return t(*args, **kwargs)
-        except error_classes as e:
+        except Exception as e:
+            errno = getattr(e, 'errno', None)
+            if not errno and hasattr(errno, "reason"):
+                errno = getattr(e.reason, 'errno', None)
+
+            if errno in skip_errnos:
+                raise SkipTest("Skipping test due to known errno"
+                               " and error %s" % e)
+
+            try:
+                e_str = traceback.format_exc(e)
+            except:
+                e_str = str(e)
+
+            if any([m.lower() in e_str.lower() for m in _skip_on_messages]):
+                raise SkipTest("Skipping test because exception message is known"
+                               " and error %s" % e)
+
+            if not isinstance(e, error_classes):
+                raise
+
             if raise_on_error or can_connect(url, error_classes):
                 raise
             else:
@@ -1175,6 +1307,9 @@ def with_connectivity_check(t, url="http://www.google.com",
                                " and error %s" % e)
 
     return wrapper
+
+
+with_connectivity_check = network
 
 
 class SimpleMock(object):
@@ -1390,3 +1525,67 @@ def assert_produces_warning(expected_warning=Warning, filter_level="always"):
                                  % expected_warning.__name__)
         assert not extra_warnings, ("Caused unexpected warning(s): %r."
                                     % extra_warnings)
+
+
+def skip_if_no_ne(engine='numexpr'):
+    import nose
+    _USE_NUMEXPR = pd.computation.expressions._USE_NUMEXPR
+
+    if engine == 'numexpr':
+        try:
+            import numexpr as ne
+        except ImportError:
+            raise nose.SkipTest("numexpr not installed")
+
+        if not _USE_NUMEXPR:
+            raise nose.SkipTest("numexpr disabled")
+
+        if ne.__version__ < LooseVersion('2.0'):
+            raise nose.SkipTest("numexpr version too low: "
+                                "%s" % ne.__version__)
+
+
+def disabled(t):
+    t.disabled = True
+    return t
+
+
+class RNGContext(object):
+    """
+    Context manager to set the numpy random number generator speed. Returns
+    to the original value upon exiting the context manager.
+
+    Parameters
+    ----------
+    seed : int
+        Seed for numpy.random.seed
+
+    Examples
+    --------
+
+    with RNGContext(42):
+        np.random.randn()
+    """
+
+    def __init__(self, seed):
+        self.seed = seed
+
+    def __enter__(self):
+
+        self.start_state = np.random.get_state()
+        np.random.seed(self.seed)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+
+        np.random.set_state(self.start_state)
+
+
+@contextmanager
+def use_numexpr(use, min_elements=expr._MIN_ELEMENTS):
+    olduse = expr._USE_NUMEXPR
+    oldmin = expr._MIN_ELEMENTS
+    expr.set_use_numexpr(use)
+    expr._MIN_ELEMENTS = min_elements
+    yield
+    expr._MIN_ELEMENTS = oldmin
+    expr.set_use_numexpr(olduse)

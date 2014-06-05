@@ -1,7 +1,8 @@
 # pylint: disable=E1101,E1103,W0232
 import datetime
+import warnings
 from functools import partial
-from pandas.compat import range, zip, lrange, lzip, u
+from pandas.compat import range, zip, lrange, lzip, u, reduce
 from pandas import compat
 import numpy as np
 
@@ -9,13 +10,14 @@ import pandas.tslib as tslib
 import pandas.lib as lib
 import pandas.algos as _algos
 import pandas.index as _index
-from pandas.lib import Timestamp
-from pandas.core.base import FrozenList, FrozenNDArray
+from pandas.lib import Timestamp, is_datetime_array
+from pandas.core.base import FrozenList, FrozenNDArray, IndexOpsMixin
 
 from pandas.util.decorators import cache_readonly, deprecate
-from pandas.core.common import isnull
+from pandas.core.common import isnull, array_equivalent
 import pandas.core.common as com
-from pandas.core.common import _values_from_object, is_float, is_integer
+from pandas.core.common import (_values_from_object, is_float, is_integer,
+                                ABCSeries)
 from pandas.core.config import get_option
 
 # simplify
@@ -24,6 +26,16 @@ default_pprint = lambda x: com.pprint_thing(x, escape_chars=('\t', '\r', '\n'),
 
 
 __all__ = ['Index']
+
+
+_unsortable_types = frozenset(('mixed', 'mixed-integer'))
+
+
+def _try_get_item(x):
+    try:
+        return x.item()
+    except AttributeError:
+        return x
 
 
 def _indexOp(opname):
@@ -57,7 +69,7 @@ def _shouldbe_timestamp(obj):
 _Identity = object
 
 
-class Index(FrozenNDArray):
+class Index(IndexOpsMixin, FrozenNDArray):
 
     """
     Immutable ndarray implementing an ordered, sliceable set. The basic object
@@ -71,6 +83,8 @@ class Index(FrozenNDArray):
         Make a copy of input ndarray
     name : object
         Name to be stored in the index
+    tupleize_cols : bool (default: True)
+        When True, attempt to create a MultiIndex if possible
 
     Notes
     -----
@@ -92,20 +106,21 @@ class Index(FrozenNDArray):
     name = None
     asi8 = None
     _comparables = ['name']
+    _allow_index_ops = True
+    _allow_datetime_index_ops = False
+    _allow_period_index_ops = False
 
     _engine_type = _index.ObjectEngine
 
     def __new__(cls, data, dtype=None, copy=False, name=None, fastpath=False,
-                **kwargs):
+                tupleize_cols=True, **kwargs):
 
         # no class inference!
         if fastpath:
-            subarr = data.view(cls)
-            subarr.name = name
-            return subarr
+            return cls._simple_new(data, name)
 
         from pandas.tseries.period import PeriodIndex
-        if isinstance(data, np.ndarray):
+        if isinstance(data, (np.ndarray, ABCSeries)):
             if issubclass(data.dtype.type, np.datetime64):
                 from pandas.tseries.index import DatetimeIndex
                 result = DatetimeIndex(data, copy=copy, name=name, **kwargs)
@@ -136,8 +151,19 @@ class Index(FrozenNDArray):
 
         elif np.isscalar(data):
             cls._scalar_data_error(data)
-
         else:
+            if tupleize_cols and isinstance(data, list) and data:
+                try:
+                    sorted(data)
+                    has_mixed_types = False
+                except (TypeError, UnicodeDecodeError):
+                    has_mixed_types = True  # python3 only
+                if isinstance(data[0], tuple) and not has_mixed_types:
+                    try:
+                        return MultiIndex.from_tuples(
+                            data, names=name or kwargs.get('names'))
+                    except (TypeError, KeyError):
+                        pass  # python2 - MultiIndex fails on mixed types
             # other iterable of some kind
             subarr = com._asarray_tuplesafe(data, dtype=object)
 
@@ -151,7 +177,7 @@ class Index(FrozenNDArray):
                 if (inferred.startswith('datetime') or
                         tslib.is_timestamp_array(subarr)):
                     from pandas.tseries.index import DatetimeIndex
-                    return DatetimeIndex(data, copy=copy, name=name, **kwargs)
+                    return DatetimeIndex(subarr, copy=copy, name=name, **kwargs)
                 elif inferred == 'period':
                     return PeriodIndex(subarr, name=name, **kwargs)
 
@@ -159,6 +185,12 @@ class Index(FrozenNDArray):
         # could also have a _set_name, but I don't think it's really necessary
         subarr._set_names([name])
         return subarr
+
+    @classmethod
+    def _simple_new(cls, values, name, **kwargs):
+        result = values.view(cls)
+        result.name = name
+        return result
 
     def is_(self, other):
         """
@@ -212,7 +244,7 @@ class Index(FrozenNDArray):
                 cls._scalar_data_error(data)
 
             # other iterable of some kind
-            if not isinstance(data, (list, tuple)):
+            if not isinstance(data, (ABCSeries, list, tuple)):
                 data = list(data)
             data = np.asarray(data)
         return data
@@ -263,13 +295,28 @@ class Index(FrozenNDArray):
             new_index = new_index.astype(dtype)
         return new_index
 
-    def to_series(self):
+    def to_series(self, keep_tz=False):
         """
-        return a series with both index and values equal to the index keys
+        Create a Series with both index and values equal to the index keys
         useful with map for returning an indexer based on an index
+
+        Parameters
+        ----------
+        keep_tz : optional, defaults False.
+                  applies only to a DatetimeIndex
+
+        Returns
+        -------
+        Series : dtype will be based on the type of the Index values.
         """
+
         import pandas as pd
-        return pd.Series(self.values, index=self, name=self.name)
+        values = self._to_embed(keep_tz)
+        return pd.Series(values, index=self, name=self.name)
+
+    def _to_embed(self, keep_tz=False):
+        """ return an array repr of this object, potentially casting to object """
+        return self.values
 
     def astype(self, dtype):
         return Index(self.values.astype(dtype), name=self.name,
@@ -437,11 +484,19 @@ class Index(FrozenNDArray):
             return ikey
 
         if typ == 'iloc':
-            if not (is_integer(key) or is_float(key)):
-                self._convert_indexer_error(key, 'label')
-            return to_int()
+            if is_integer(key):
+                return key
+            elif is_float(key):
+                key = to_int()
+                warnings.warn("scalar indexers for index type {0} should be integers and not floating point".format(
+                    type(self).__name__),FutureWarning)
+                return key
+            return self._convert_indexer_error(key, 'label')
 
         if is_float(key):
+            if not self.is_floating():
+                warnings.warn("scalar indexers for index type {0} should be integers and not floating point".format(
+                    type(self).__name__),FutureWarning)
             return to_int()
 
         return key
@@ -450,17 +505,9 @@ class Index(FrozenNDArray):
         """ validate and raise if needed on a slice indexers according to the
         passed in function """
 
-        if not f(key.start):
-            self._convert_indexer_error(key.start, 'slice start value')
-        if not f(key.stop):
-            self._convert_indexer_error(key.stop, 'slice stop value')
-        if not f(key.step):
-            self._convert_indexer_error(key.step, 'slice step value')
-
-    def _convert_slice_indexer_iloc(self, key):
-        """ convert a slice indexer for iloc only """
-        self._validate_slicer(key, lambda v: v is None or is_integer(v))
-        return key
+        for c in ['start','stop','step']:
+            if not f(getattr(key,c)):
+                self._convert_indexer_error(key.start, 'slice {0} value'.format(c))
 
     def _convert_slice_indexer_getitem(self, key, is_index_slice=False):
         """ called from the getitem slicers, determine how to treat the key
@@ -472,6 +519,25 @@ class Index(FrozenNDArray):
     def _convert_slice_indexer(self, key, typ=None):
         """ convert a slice indexer. disallow floats in the start/stop/step """
 
+        # validate iloc
+        if typ == 'iloc':
+
+            # need to coerce to_int if needed
+            def f(c):
+                v = getattr(key,c)
+                if v is None or is_integer(v):
+                    return v
+
+                # warn if its a convertible float
+                if v == int(v):
+                    warnings.warn("slice indexers when using iloc should be integers "
+                                  "and not floating point",FutureWarning)
+                    return int(v)
+
+                self._convert_indexer_error(v, 'slice {0} value'.format(c))
+
+            return slice(*[ f(c) for c in ['start','stop','step']])
+
         # validate slicers
         def validate(v):
             if v is None or is_integer(v):
@@ -482,7 +548,6 @@ class Index(FrozenNDArray):
                 return False
 
             return True
-
         self._validate_slicer(key, validate)
 
         # figure out if this is a positional indexer
@@ -495,9 +560,7 @@ class Index(FrozenNDArray):
         is_index_slice = is_int(start) and is_int(stop)
         is_positional = is_index_slice and not self.is_integer()
 
-        if typ == 'iloc':
-            return self._convert_slice_indexer_iloc(key)
-        elif typ == 'getitem':
+        if typ == 'getitem':
             return self._convert_slice_indexer_getitem(
                 key, is_index_slice=is_index_slice)
 
@@ -536,6 +599,29 @@ class Index(FrozenNDArray):
     def _convert_list_indexer(self, key, typ=None):
         """ convert a list indexer. these should be locations """
         return key
+
+    def _convert_list_indexer_for_mixed(self, keyarr, typ=None):
+        """ passed a key that is tuplesafe that is integer based
+            and we have a mixed index (e.g. number/labels). figure out
+            the indexer. return None if we can't help
+        """
+        if com.is_integer_dtype(keyarr) and not self.is_floating():
+            if self.inferred_type != 'integer':
+                keyarr = np.where(keyarr < 0,
+                                  len(self) + keyarr, keyarr)
+
+            if self.inferred_type == 'mixed-integer':
+                indexer = self.get_indexer(keyarr)
+                if (indexer >= 0).all():
+                    return indexer
+
+                from pandas.core.indexing import _maybe_convert_indices
+                return _maybe_convert_indices(indexer, len(self))
+
+            elif not self.inferred_type == 'integer':
+                return keyarr
+
+        return None
 
     def _convert_indexer_error(self, key, msg=None):
         if msg is None:
@@ -577,7 +663,7 @@ class Index(FrozenNDArray):
 
     @cache_readonly
     def is_all_dates(self):
-        return self.inferred_type == 'datetime'
+        return is_datetime_array(self.values)
 
     def __iter__(self):
         return iter(self.values)
@@ -613,28 +699,35 @@ class Index(FrozenNDArray):
         raise TypeError("unhashable type: %r" % type(self).__name__)
 
     def __getitem__(self, key):
-        """Override numpy.ndarray's __getitem__ method to work as desired"""
-        arr_idx = self.view(np.ndarray)
+        """
+        Override numpy.ndarray's __getitem__ method to work as desired.
+
+        This function adds lists and Series as valid boolean indexers
+        (ndarrays only supports ndarray with dtype=bool).
+
+        If resulting ndim != 1, plain ndarray is returned instead of
+        corresponding `Index` subclass.
+
+        """
+        # There's no custom logic to be implemented in __getslice__, so it's
+        # not overloaded intentionally.
+        __getitem__ = super(Index, self).__getitem__
         if np.isscalar(key):
-            return arr_idx[key]
+            return __getitem__(key)
+
+        if isinstance(key, slice):
+            # This case is separated from the conditional above to avoid
+            # pessimization of basic indexing.
+            return __getitem__(key)
+
+        if com._is_bool_indexer(key):
+            return __getitem__(np.asarray(key))
+
+        result = __getitem__(key)
+        if result.ndim > 1:
+            return result.view(np.ndarray)
         else:
-            if com._is_bool_indexer(key):
-                key = np.asarray(key)
-
-            result = arr_idx[key]
-            if result.ndim > 1:
-                return result
-
-            return Index(result, name=self.name)
-
-    def _getitem_slice(self, key):
-        """ getitem for a bool/sliceable, fallback to standard getitem """
-        try:
-            arr_idx = self.view(np.ndarray)
-            result = arr_idx[key]
-            return self.__class__(result, name=self.name, fastpath=True)
-        except:
-            return self.__getitem__(key)
+            return result
 
     def append(self, other):
         """
@@ -752,7 +845,7 @@ class Index(FrozenNDArray):
         if type(other) != Index:
             return other.equals(self)
 
-        return np.array_equal(self, other)
+        return array_equivalent(self, other)
 
     def identical(self, other):
         """Similar to equals, but check that other comparable attributes are
@@ -760,14 +853,15 @@ class Index(FrozenNDArray):
         """
         return (self.equals(other) and
                 all((getattr(self, c, None) == getattr(other, c, None)
-                     for c in self._comparables)))
+                     for c in self._comparables)) and
+                type(self) == type(other))
 
     def asof(self, label):
         """
         For a sorted index, return the most recent label up to and including
         the passed label. Return NaN if not found
         """
-        if isinstance(label, (Index, np.ndarray)):
+        if isinstance(label, (Index, ABCSeries, np.ndarray)):
             raise TypeError('%s' % type(label))
 
         if label not in self:
@@ -835,7 +929,10 @@ class Index(FrozenNDArray):
         """
         See docstring for ndarray.argsort
         """
-        return self.view(np.ndarray).argsort(*args, **kwargs)
+        result = self.asi8
+        if result is None:
+            result = self.view(np.ndarray)
+        return result.argsort(*args, **kwargs)
 
     def __add__(self, other):
         if isinstance(other, Index):
@@ -859,6 +956,9 @@ class Index(FrozenNDArray):
 
     def __or__(self, other):
         return self.union(other)
+
+    def __xor__(self, other):
+        return self.sym_diff(other)
 
     def union(self, other):
         """
@@ -900,29 +1000,39 @@ class Index(FrozenNDArray):
                 result.extend([x for x in other.values if x not in value_set])
         else:
             indexer = self.get_indexer(other)
-            indexer = (indexer == -1).nonzero()[0]
+            indexer, = (indexer == -1).nonzero()
 
             if len(indexer) > 0:
                 other_diff = com.take_nd(other.values, indexer,
                                          allow_fill=False)
                 result = com._concat_compat((self.values, other_diff))
+
                 try:
-                    result.sort()
-                except Exception:
-                    pass
+                    self.values[0] < other_diff[0]
+                except TypeError as e:
+                    warnings.warn("%s, sort order is undefined for "
+                                  "incomparable objects" % e, RuntimeWarning)
+                else:
+                    types = frozenset((self.inferred_type,
+                                       other.inferred_type))
+                    if not types & _unsortable_types:
+                        result.sort()
+
             else:
-                # contained in
+                result = self.values
+
                 try:
-                    result = np.sort(self.values)
-                except TypeError:  # pragma: no cover
-                    result = self.values
+                    result = np.sort(result)
+                except TypeError as e:
+                    warnings.warn("%s, sort order is undefined for "
+                                  "incomparable objects" % e, RuntimeWarning)
 
         # for subclasses
         return self._wrap_union_result(other, result)
 
     def _wrap_union_result(self, other, result):
         name = self.name if self.name == other.name else None
-        return type(self)(data=result, name=name)
+        return self.__class__(data=result, name=name)
 
     def intersection(self, other):
         """
@@ -959,13 +1069,26 @@ class Index(FrozenNDArray):
             except TypeError:
                 pass
 
-        indexer = self.get_indexer(other.values)
-        indexer = indexer.take((indexer != -1).nonzero()[0])
+        try:
+            indexer = self.get_indexer(other.values)
+            indexer = indexer.take((indexer != -1).nonzero()[0])
+        except:
+            # duplicates
+            indexer = self.get_indexer_non_unique(other.values)[0].unique()
+
         return self.take(indexer)
 
     def diff(self, other):
         """
         Compute sorted set difference of two Index objects
+
+        Parameters
+        ----------
+        other : Index or array-like
+
+        Returns
+        -------
+        diff : Index
 
         Notes
         -----
@@ -973,10 +1096,6 @@ class Index(FrozenNDArray):
 
         >>> index - index2
         >>> index.diff(index2)
-
-        Returns
-        -------
-        diff : Index
         """
 
         if not hasattr(other, '__iter__'):
@@ -994,17 +1113,50 @@ class Index(FrozenNDArray):
         theDiff = sorted(set(self) - set(other))
         return Index(theDiff, name=result_name)
 
-    def unique(self):
+    def sym_diff(self, other, result_name=None):
         """
-        Return array of unique values in the Index. Significantly faster than
-        numpy.unique
+        Compute the sorted symmetric difference of two Index objects.
+
+        Parameters
+        ----------
+
+        other : array-like
+        result_name : str
 
         Returns
         -------
-        uniques : ndarray
+        sym_diff : Index
+
+        Notes
+        -----
+        ``sym_diff`` contains elements that appear in either ``idx1`` or
+        ``idx2`` but not both. Equivalent to the Index created by
+        ``(idx1 - idx2) + (idx2 - idx1)`` with duplicates dropped.
+
+        The sorting of a result containing ``NaN`` values is not guaranteed
+        across Python versions. See GitHub issue #6444.
+
+        Examples
+        --------
+        >>> idx1 = Index([1, 2, 3, 4])
+        >>> idx2 = Index([2, 3, 4, 5])
+        >>> idx1.sym_diff(idx2)
+        Int64Index([1, 5], dtype='int64')
+
+        You can also use the ``^`` operator:
+
+        >>> idx1 ^ idx2
+        Int64Index([1, 5], dtype='int64')
         """
-        from pandas.core.nanops import unique1d
-        return unique1d(self.values)
+        if not hasattr(other, '__iter__'):
+            raise TypeError('Input must be iterable!')
+
+        if not isinstance(other, Index):
+            other = Index(other)
+            result_name = result_name or self.name
+
+        the_diff = sorted(set((self - other) + (other - self)))
+        return Index(the_diff, name=result_name)
 
     def get_loc(self, key):
         """
@@ -1154,6 +1306,12 @@ class Index(FrozenNDArray):
         indexer, missing = self._engine.get_indexer_non_unique(tgt_values)
         return Index(indexer), missing
 
+    def get_indexer_for(self, target, **kwargs):
+        """ guaranteed return of an indexer even when non-unique """
+        if self.is_unique:
+            return self.get_indexer(target, **kwargs)
+        return self.get_indexer_non_unique(target, **kwargs)[0]
+
     def _possibly_promote(self, other):
         # A hack, but it works
         from pandas.tseries.index import DatetimeIndex
@@ -1197,7 +1355,7 @@ class Index(FrozenNDArray):
         return aliases.get(method, method)
 
     def reindex(self, target, method=None, level=None, limit=None,
-                copy_if_needed=False, takeable=False):
+                copy_if_needed=False):
         """
         For Index, simply returns the new index and the results of
         get_indexer. Provided here to enable an interface that is amenable for
@@ -1225,13 +1383,6 @@ class Index(FrozenNDArray):
                         target = self.copy()
 
             else:
-
-                if takeable:
-                    if method is not None or limit is not None:
-                        raise ValueError("cannot do a takeable reindex with "
-                                         "with a method or limit")
-                    return self[target], target
-
                 if self.is_unique:
                     indexer = self.get_indexer(target, method=method,
                                                limit=limit)
@@ -1252,15 +1403,28 @@ class Index(FrozenNDArray):
         ----------
         other : Index
         how : {'left', 'right', 'inner', 'outer'}
-        level :
+        level : int or level name, default None
         return_indexers : boolean, default False
 
         Returns
         -------
         join_index, (left_indexer, right_indexer)
         """
-        if (level is not None and (isinstance(self, MultiIndex) or
-                                   isinstance(other, MultiIndex))):
+        self_is_mi = isinstance(self, MultiIndex)
+        other_is_mi = isinstance(other, MultiIndex)
+
+        # try to figure out the join level
+        # GH3662
+        if (level is None and (self_is_mi or other_is_mi)):
+
+            # have the same levels/names so a simple join
+            if self.names == other.names:
+                pass
+            else:
+                return self._join_multi(other, how=how, return_indexers=return_indexers)
+
+        # join on the level
+        if (level is not None and (self_is_mi or other_is_mi)):
             return self._join_level(other, level, how=how,
                                     return_indexers=return_indexers)
 
@@ -1337,6 +1501,43 @@ class Index(FrozenNDArray):
             return join_index, lindexer, rindexer
         else:
             return join_index
+
+    def _join_multi(self, other, how, return_indexers=True):
+
+        self_is_mi = isinstance(self, MultiIndex)
+        other_is_mi = isinstance(other, MultiIndex)
+
+        # figure out join names
+        self_names = [ n for n in self.names if n is not None ]
+        other_names = [ n for n in other.names if n is not None ]
+        overlap = list(set(self_names) & set(other_names))
+
+        # need at least 1 in common, but not more than 1
+        if not len(overlap):
+            raise ValueError("cannot join with no level specified and no overlapping names")
+        if len(overlap) > 1:
+            raise NotImplementedError("merging with more than one level overlap on a multi-index is not implemented")
+        jl = overlap[0]
+
+        # make the indices into mi's that match
+        if not (self_is_mi and other_is_mi):
+
+            flip_order = False
+            if self_is_mi:
+                self, other = other, self
+                flip_order = True
+
+            level = other.names.index(jl)
+            result = self._join_level(other, level, how=how,
+                                      return_indexers=return_indexers)
+
+            if flip_order:
+                if isinstance(result, tuple):
+                    return result[0], result[2], result[1]
+            return result
+
+        # 2 multi-indexes
+        raise NotImplementedError("merging with both multi-indexes is not implemented")
 
     def _join_non_unique(self, other, how='left', return_indexers=False):
         from pandas.tools.merge import _get_join_indexers
@@ -1525,69 +1726,62 @@ class Index(FrozenNDArray):
         """
 
         is_unique = self.is_unique
-        if start is None:
-            start_slice = 0
-        else:
+
+        def _get_slice(starting_value, offset, search_side, slice_property,
+                       search_value):
+            if search_value is None:
+                return starting_value
+
             try:
-                start_slice = self.get_loc(start)
+                slc = self.get_loc(search_value)
 
                 if not is_unique:
 
                     # get_loc will return a boolean array for non_uniques
                     # if we are not monotonic
-                    if isinstance(start_slice, np.ndarray):
+                    if isinstance(slc, np.ndarray):
                         raise KeyError("cannot peform a slice operation "
                                        "on a non-unique non-monotonic index")
 
-                if isinstance(start_slice, slice):
-                    start_slice = start_slice.start
+                if isinstance(slc, slice):
+                    slc = getattr(slc, slice_property)
+                else:
+                    slc += offset
 
             except KeyError:
                 if self.is_monotonic:
-                    start_slice = self.searchsorted(start, side='left')
+                    if not is_unique:
+                        slc = search_value
+                    else:
+                        slc = self.searchsorted(search_value,
+                                                side=search_side)
                 else:
                     raise
+            return slc
 
-        if end is None:
-            end_slice = len(self)
-        else:
-            try:
-                end_slice = self.get_loc(end)
-
-                if not is_unique:
-
-                    # get_loc will return a boolean array for non_uniques
-                    if isinstance(end_slice, np.ndarray):
-                        raise KeyError("cannot perform a slice operation "
-                                       "on a non-unique non-monotonic index")
-
-                if isinstance(end_slice, slice):
-                    end_slice = end_slice.stop
-                else:
-                    end_slice += 1
-
-            except KeyError:
-                if self.is_monotonic:
-                    end_slice = self.searchsorted(end, side='right')
-                else:
-                    raise
+        start_slice = _get_slice(0, offset=0, search_side='left',
+                                 slice_property='start', search_value=start)
+        end_slice = _get_slice(len(self), offset=1, search_side='right',
+                               slice_property='stop', search_value=end)
 
         return start_slice, end_slice
 
     def delete(self, loc):
         """
-        Make new Index with passed location deleted
+        Make new Index with passed location(-s) deleted
 
         Returns
         -------
         new_index : Index
         """
-        arr = np.delete(self.values, loc)
-        return Index(arr)
+        return self._simple_new(np.delete(self, loc), self.name,
+                                freq=getattr(self, 'freq', None),
+                                tz=getattr(self, 'tz', None))
 
     def insert(self, loc, item):
         """
-        Make new Index inserting new item at location
+        Make new Index inserting new item at location. Follows
+        Python list.append semantics for negative values
 
         Parameters
         ----------
@@ -1598,11 +1792,11 @@ class Index(FrozenNDArray):
         -------
         new_index : Index
         """
-        index = np.asarray(self)
-        # because numpy is fussy with tuples
-        item_idx = Index([item], dtype=index.dtype)
-        new_index = np.concatenate((index[:loc], item_idx, index[loc:]))
-        return Index(new_index, name=self.name)
+        _self = np.asarray(self)
+        item_idx = Index([item], dtype=self.dtype).values
+        idx = np.concatenate(
+            (_self[:loc], item_idx, _self[loc:]))
+        return Index(idx, name=self.name)
 
     def drop(self, labels):
         """
@@ -1715,7 +1909,7 @@ class Int64Index(Index):
         #     return False
 
         try:
-            return np.array_equal(self, other)
+            return array_equivalent(self, other)
         except TypeError:
             # e.g. fails in numpy 1.6 with DatetimeIndex #1681
             return False
@@ -1743,11 +1937,17 @@ class Float64Index(Index):
 
     Notes
     -----
-    An Index instance can **only** contain hashable objects
+    An Float64Index instance can **only** contain hashable objects
     """
 
     # when this is not longer object dtype this can be changed
-    #_engine_type = _index.Float64Engine
+    _engine_type = _index.Float64Engine
+    _groupby = _algos.groupby_float64
+    _arrmap = _algos.arrmap_float64
+    _left_indexer_unique = _algos.left_join_indexer_unique_float64
+    _left_indexer = _algos.left_join_indexer_float64
+    _inner_indexer = _algos.inner_join_indexer_float64
+    _outer_indexer = _algos.outer_join_indexer_float64
 
     def __new__(cls, data, dtype=None, copy=False, name=None, fastpath=False):
 
@@ -1770,9 +1970,9 @@ class Float64Index(Index):
             raise TypeError('Unsafe NumPy casting, you must '
                             'explicitly cast')
 
-        # coerce to object for storage
-        if not subarr.dtype == np.object_:
-            subarr = subarr.astype(object)
+        # coerce to float64 for storage
+        if subarr.dtype != np.float64:
+            subarr = subarr.astype(np.float64)
 
         subarr = subarr.view(cls)
         subarr.name = name
@@ -1783,13 +1983,12 @@ class Float64Index(Index):
         return 'floating'
 
     def astype(self, dtype):
-        if np.dtype(dtype) != np.object_:
-            raise TypeError('Setting %s dtype to anything other than object '
-                            'is not supported' % self.__class__)
-        return Index(self.values, name=self.name, dtype=object)
+        if np.dtype(dtype) not in (np.object, np.float64):
+            raise TypeError('Setting %s dtype to anything other than '
+                            'float64 or object is not supported' % self.__class__)
+        return Index(self.values, name=self.name, dtype=dtype)
 
     def _convert_scalar_indexer(self, key, typ=None):
-
         if typ == 'iloc':
             return super(Float64Index, self)._convert_scalar_indexer(key,
                                                                      typ=typ)
@@ -1799,13 +1998,12 @@ class Float64Index(Index):
         """ convert a slice indexer, by definition these are labels
             unless we are iloc """
         if typ == 'iloc':
-            return self._convert_slice_indexer_iloc(key)
-        elif typ == 'getitem':
-            pass
+            return super(Float64Index, self)._convert_slice_indexer(key,
+                                                                    typ=typ)
 
         # allow floats here
-        self._validate_slicer(
-            key, lambda v: v is None or is_integer(v) or is_float(v))
+        validator = lambda v: v is None or is_integer(v) or is_float(v)
+        self._validate_slicer(key, validator)
 
         # translate to locations
         return self.slice_indexer(key.start, key.stop, key.step)
@@ -1835,11 +2033,82 @@ class Float64Index(Index):
         if self is other:
             return True
 
+        # need to compare nans locations and make sure that they are the same
+        # since nans don't compare equal this is a bit tricky
         try:
-            return np.array_equal(self, other)
+            if not isinstance(other, Float64Index):
+                other = self._constructor(other)
+            if self.dtype != other.dtype or self.shape != other.shape:
+                return False
+            left, right = self.values, other.values
+            return ((left == right) | (self._isnan & other._isnan)).all()
         except TypeError:
             # e.g. fails in numpy 1.6 with DatetimeIndex #1681
             return False
+
+    def __contains__(self, other):
+        if super(Float64Index, self).__contains__(other):
+            return True
+
+        try:
+            # if other is a sequence this throws a ValueError
+            return np.isnan(other) and self._hasnans
+        except ValueError:
+            try:
+                return len(other) <= 1 and _try_get_item(other) in self
+            except TypeError:
+                return False
+        except:
+            return False
+
+    def get_loc(self, key):
+        if np.isnan(key):
+            try:
+                return self._nan_idxs.item()
+            except ValueError:
+                return self._nan_idxs
+        return super(Float64Index, self).get_loc(key)
+
+    @property
+    def is_all_dates(self):
+        """
+        Checks that all the labels are datetime objects
+        """
+        return False
+
+    @cache_readonly
+    def _nan_idxs(self):
+        w, = self._isnan.nonzero()
+        return w
+
+    @cache_readonly
+    def _isnan(self):
+        return np.isnan(self.values)
+
+    @cache_readonly
+    def _hasnans(self):
+        return self._isnan.any()
+
+    @cache_readonly
+    def is_unique(self):
+        return super(Float64Index, self).is_unique and self._nan_idxs.size < 2
+
+    def isin(self, values):
+        """
+        Compute boolean array of whether each index value is found in the
+        passed set of values
+
+        Parameters
+        ----------
+        values : set or sequence of values
+
+        Returns
+        -------
+        is_contained : ndarray (boolean dtype)
+        """
+        value_set = set(values)
+        return lib.ismember_nans(self._array_values(), value_set,
+                                 isnull(list(value_set)).any())
 
 
 class MultiIndex(Index):
@@ -2139,14 +2408,6 @@ class MultiIndex(Index):
     def __len__(self):
         return len(self.labels[0])
 
-    def _convert_slice_indexer(self, key, typ=None):
-        """ convert a slice indexer. disallow floats in the start/stop/step """
-
-        if typ == 'iloc':
-            return self._convert_slice_indexer_iloc(key)
-
-        return super(MultiIndex, self)._convert_slice_indexer(key, typ=typ)
-
     def _get_names(self):
         return FrozenList(level.name for level in self.levels)
 
@@ -2165,6 +2426,13 @@ class MultiIndex(Index):
 
     names = property(
         fset=_set_names, fget=_get_names, doc="Names of levels in MultiIndex")
+
+    def _reference_duplicate_name(self, name):
+        """
+        Returns True if the name refered to in self.names is duplicated.
+        """
+        # count the times name equals an element in self.names.
+        return np.sum(name == np.asarray(self.names)) > 1
 
     def _format_native_types(self, **kwargs):
         return self.tolist()
@@ -2325,18 +2593,19 @@ class MultiIndex(Index):
 
         Parameters
         ----------
-        level : int
+        level : int or level name
 
         Returns
         -------
         values : ndarray
         """
         num = self._get_level_number(level)
-        unique_vals = self.levels[num]  # .values
+        unique = self.levels[num]  # .values
         labels = self.labels[num]
-        values = Index(com.take_1d(unique_vals.values, labels,
-                                   fill_value=unique_vals._na_value))
-        values.name = self.names[num]
+        filled = com.take_1d(unique.values, labels, fill_value=unique._na_value)
+        values = unique._simple_new(filled, self.names[num],
+                                    freq=getattr(unique, 'freq', None),
+                                    tz=getattr(unique, 'tz', None))
         return values
 
     def format(self, space=2, sparsify=None, adjoin=True, names=False,
@@ -2396,6 +2665,44 @@ class MultiIndex(Index):
         else:
             return result_levels
 
+    def to_hierarchical(self, n_repeat, n_shuffle=1):
+        """
+        Return a MultiIndex reshaped to conform to the
+        shapes given by n_repeat and n_shuffle.
+
+        Useful to replicate and rearrange a MultiIndex for combination
+        with another Index with n_repeat items.
+
+        Parameters
+        ----------
+        n_repeat : int
+            Number of times to repeat the labels on self
+        n_shuffle : int
+            Controls the reordering of the labels. If the result is going
+            to be an inner level in a MultiIndex, n_shuffle will need to be
+            greater than one. The size of each label must divisible by
+            n_shuffle.
+
+        Returns
+        -------
+        MultiIndex
+
+        Examples
+        --------
+        >>> idx = MultiIndex.from_tuples([(1, u'one'), (1, u'two'),
+                                          (2, u'one'), (2, u'two')])
+        >>> idx.to_hierarchical(3)
+        MultiIndex(levels=[[1, 2], [u'one', u'two']],
+                   labels=[[0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1],
+                           [0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1]])
+        """
+        levels = self.levels
+        labels = [np.repeat(x, n_repeat) for x in self.labels]
+        # Assumes that each label is divisible by n_shuffle
+        labels = [x.reshape(n_shuffle, -1).ravel(1) for x in labels]
+        names = self.names
+        return MultiIndex(levels=levels, labels=labels, names=names)
+
     @property
     def is_all_dates(self):
         return False
@@ -2434,7 +2741,9 @@ class MultiIndex(Index):
 
         Parameters
         ----------
-        arrays : list / sequence
+        arrays : list / sequence of array-likes
+            Each array-like gives one level's value for each data point.
+            len(arrays) is the number of levels.
         sortorder : int or None
             Level of sortedness (must be lexicographically sorted by that
             level)
@@ -2442,6 +2751,17 @@ class MultiIndex(Index):
         Returns
         -------
         index : MultiIndex
+
+        Examples
+        --------
+        >>> arrays = [[1, 1, 2, 2], ['red', 'blue', 'red', 'blue']]
+        >>> MultiIndex.from_arrays(arrays, names=('number', 'color'))
+
+        See Also
+        --------
+        MultiIndex.from_tuples : Convert list of tuples to MultiIndex
+        MultiIndex.from_product : Make a MultiIndex from cartesian product
+                                  of iterables
         """
         from pandas.core.categorical import Categorical
 
@@ -2466,7 +2786,8 @@ class MultiIndex(Index):
 
         Parameters
         ----------
-        tuples : array-like
+        tuples : list / sequence of tuple-likes
+            Each tuple is the index of one row/column.
         sortorder : int or None
             Level of sortedness (must be lexicographically sorted by that
             level)
@@ -2474,6 +2795,18 @@ class MultiIndex(Index):
         Returns
         -------
         index : MultiIndex
+
+        Examples
+        --------
+        >>> tuples = [(1, u'red'), (1, u'blue'),
+                      (2, u'red'), (2, u'blue')]
+        >>> MultiIndex.from_tuples(tuples, names=('number', 'color'))
+
+        See Also
+        --------
+        MultiIndex.from_arrays : Convert list of arrays to MultiIndex
+        MultiIndex.from_product : Make a MultiIndex from cartesian product
+                                  of iterables
         """
         if len(tuples) == 0:
             # I think this is right? Not quite sure...
@@ -2490,6 +2823,45 @@ class MultiIndex(Index):
             arrays = lzip(*tuples)
 
         return MultiIndex.from_arrays(arrays, sortorder=sortorder,
+                                      names=names)
+
+    @classmethod
+    def from_product(cls, iterables, sortorder=None, names=None):
+        """
+        Make a MultiIndex from the cartesian product of multiple iterables
+
+        Parameters
+        ----------
+        iterables : list / sequence of iterables
+            Each iterable has unique labels for each level of the index.
+        sortorder : int or None
+            Level of sortedness (must be lexicographically sorted by that
+            level).
+        names : list / sequence of strings or None
+            Names for the levels in the index.
+
+        Returns
+        -------
+        index : MultiIndex
+
+        Examples
+        --------
+        >>> numbers = [0, 1, 2]
+        >>> colors = [u'green', u'purple']
+        >>> MultiIndex.from_product([numbers, colors],
+                                     names=['number', 'color'])
+        MultiIndex(levels=[[0, 1, 2], [u'green', u'purple']],
+                   labels=[[0, 0, 1, 1, 2, 2], [0, 1, 0, 1, 0, 1]],
+                   names=[u'number', u'color'])
+
+        See Also
+        --------
+        MultiIndex.from_arrays : Convert list of arrays to MultiIndex
+        MultiIndex.from_tuples : Convert list of tuples to MultiIndex
+        """
+        from pandas.tools.util import cartesian_product
+        product = cartesian_product(iterables)
+        return MultiIndex.from_arrays(product, sortorder=sortorder,
                                       names=names)
 
     @property
@@ -2559,8 +2931,6 @@ class MultiIndex(Index):
 
             return result
 
-    _getitem_slice = __getitem__
-
     def take(self, indexer, axis=None):
         """
         Analogous to ndarray.take
@@ -2585,6 +2955,14 @@ class MultiIndex(Index):
         if not isinstance(other, (list, tuple)):
             other = [other]
 
+        if all((isinstance(o, MultiIndex) and o.nlevels >= self.nlevels) for o in other):
+            arrays = []
+            for i in range(self.nlevels):
+                label = self.get_level_values(i)
+                appended = [o.get_level_values(i) for o in other]
+                arrays.append(label.append(appended))
+            return MultiIndex.from_arrays(arrays, names=self.names)
+
         to_concat = (self.values,) + tuple(k.values for k in other)
         new_tuples = np.concatenate(to_concat)
 
@@ -2605,7 +2983,7 @@ class MultiIndex(Index):
         ----------
         labels : array-like
             Must be a list of tuples
-        level : int or name, default None
+        level : int or level name, default None
 
         Returns
         -------
@@ -2642,7 +3020,7 @@ class MultiIndex(Index):
         index = self.levels[i]
         values = index.get_indexer(labels)
 
-        mask = -lib.ismember(self.labels[i], set(values))
+        mask = ~lib.ismember(self.labels[i], set(values))
 
         return self[mask]
 
@@ -2679,7 +3057,13 @@ class MultiIndex(Index):
             new_names.pop(i)
 
         if len(new_levels) == 1:
+
+            # set nan if needed
+            mask = new_labels[0] == -1
             result = new_levels[0].take(new_labels[0])
+            if mask.any():
+                np.putmask(result, mask, np.nan)
+
             result.name = new_names[0]
             return result
         else:
@@ -2735,17 +3119,19 @@ class MultiIndex(Index):
     def __getslice__(self, i, j):
         return self.__getitem__(slice(i, j))
 
-    def sortlevel(self, level=0, ascending=True):
+    def sortlevel(self, level=0, ascending=True, sort_remaining=True):
         """
         Sort MultiIndex at the requested level. The result will respect the
         original ordering of the associated factor at that level.
 
         Parameters
         ----------
-        level : int or str, default 0
+        level : list-like, int or str, default 0
             If a string is given, must be a name of the level
+            If list-like must be names or ints of levels.
         ascending : boolean, default True
             False to sort in descending order
+        sort_remaining : sort by the remaining levels after level.
 
         Returns
         -------
@@ -2754,16 +3140,27 @@ class MultiIndex(Index):
         from pandas.core.groupby import _indexer_from_factorized
 
         labels = list(self.labels)
-
-        level = self._get_level_number(level)
-        primary = labels.pop(level)
-
         shape = list(self.levshape)
-        primshp = shape.pop(level)
 
-        indexer = _indexer_from_factorized((primary,) + tuple(labels),
-                                           (primshp,) + tuple(shape),
+        if isinstance(level, (str, int)):
+            level = [level]
+        level = [self._get_level_number(lev) for lev in level]
+
+        # partition labels and shape
+        primary = tuple(labels.pop(lev - i) for i, lev in enumerate(level))
+        primshp = tuple(shape.pop(lev - i) for i, lev in enumerate(level))
+
+        if sort_remaining:
+            primary += primary + tuple(labels)
+            primshp += primshp + tuple(shape)
+            sortorder = None
+        else:
+            sortorder = level[0]
+
+        indexer = _indexer_from_factorized(primary,
+                                           primshp,
                                            compress=False)
+
         if not ascending:
             indexer = indexer[::-1]
 
@@ -2771,7 +3168,7 @@ class MultiIndex(Index):
         new_labels = [lab.take(indexer) for lab in self.labels]
 
         new_index = MultiIndex(labels=new_labels, levels=self.levels,
-                               names=self.names, sortorder=level,
+                               names=self.names, sortorder=sortorder,
                                verify_integrity=False)
 
         return new_index, indexer
@@ -2839,7 +3236,7 @@ class MultiIndex(Index):
         return com._ensure_platform_int(indexer)
 
     def reindex(self, target, method=None, level=None, limit=None,
-                copy_if_needed=False, takeable=False):
+                copy_if_needed=False):
         """
         Performs any necessary conversion on the input index and calls
         get_indexer. This method is here so MultiIndex and an Index of
@@ -2849,10 +3246,6 @@ class MultiIndex(Index):
         -------
         (new_index, indexer, mask) : (MultiIndex, ndarray, ndarray)
         """
-
-        # a direct takeable
-        if takeable:
-            return self.take(target), target
 
         if level is not None:
             if method is not None:
@@ -2868,14 +3261,8 @@ class MultiIndex(Index):
                     indexer = self.get_indexer(target, method=method,
                                                limit=limit)
                 else:
-                    if takeable:
-                        if method is not None or limit is not None:
-                            raise ValueError("cannot do a takeable reindex "
-                                             "with a method or limit")
-                        return self[target], target
-
                     raise Exception(
-                        "cannot handle a non-takeable non-unique multi-index!")
+                        "cannot handle a non-unique multi-index!")
 
         if not isinstance(target, MultiIndex):
             if indexer is None:
@@ -3001,6 +3388,7 @@ class MultiIndex(Index):
         Parameters
         ----------
         key : label or tuple
+        level : int/level name or list thereof
 
         Returns
         -------
@@ -3124,21 +3512,108 @@ class MultiIndex(Index):
                                                    drop_level)
         else:
             indexer = self._get_level_indexer(key, level=level)
-            new_index = _maybe_drop_levels(indexer, [level], drop_level)
-            return indexer, new_index
+            return indexer, _maybe_drop_levels(indexer, [level], drop_level)
 
     def _get_level_indexer(self, key, level=0):
+        # return a boolean indexer or a slice showing where the key is
+        # in the totality of values
+
         level_index = self.levels[level]
-        loc = level_index.get_loc(key)
         labels = self.labels[level]
 
-        if level > 0 or self.lexsort_depth == 0:
-            return labels == loc
+        if isinstance(key, slice):
+            # handle a slice, returnig a slice if we can
+            # otherwise a boolean indexer
+
+            start = level_index.get_loc(key.start)
+            stop  = level_index.get_loc(key.stop)
+            step = key.step
+
+            if level > 0 or self.lexsort_depth == 0:
+                # need to have like semantics here to right
+                # searching as when we are using a slice
+                # so include the stop+1 (so we include stop)
+                m = np.zeros(len(labels),dtype=bool)
+                m[np.in1d(labels,np.arange(start,stop+1,step))] = True
+                return m
+            else:
+                # sorted, so can return slice object -> view
+                i = labels.searchsorted(start, side='left')
+                j = labels.searchsorted(stop, side='right')
+                return slice(i, j, step)
+
         else:
-            # sorted, so can return slice object -> view
-            i = labels.searchsorted(loc, side='left')
-            j = labels.searchsorted(loc, side='right')
-            return slice(i, j)
+
+            loc = level_index.get_loc(key)
+            if level > 0 or self.lexsort_depth == 0:
+                return np.array(labels == loc,dtype=bool)
+            else:
+                # sorted, so can return slice object -> view
+                i = labels.searchsorted(loc, side='left')
+                j = labels.searchsorted(loc, side='right')
+                return slice(i, j)
+
+    def get_locs(self, tup):
+        """
+        Given a tuple of slices/lists/labels/boolean indexer to a level-wise spec
+        produce an indexer to extract those locations
+
+        Parameters
+        ----------
+        key : tuple of (slices/list/labels)
+
+        Returns
+        -------
+        locs : integer list of locations or boolean indexer suitable
+               for passing to iloc
+        """
+
+        # must be lexsorted to at least as many levels
+        if not self.is_lexsorted_for_tuple(tup):
+            raise KeyError('MultiIndex Slicing requires the index to be fully lexsorted'
+                           ' tuple len ({0}), lexsort depth ({1})'.format(len(tup), self.lexsort_depth))
+
+        def _convert_indexer(r):
+            if isinstance(r, slice):
+                m = np.zeros(len(self),dtype=bool)
+                m[r] = True
+                return m
+            return r
+
+        ranges = []
+        for i,k in enumerate(tup):
+
+            if com._is_bool_indexer(k):
+                # a boolean indexer, must be the same length!
+                k = np.asarray(k)
+                if len(k) != len(self):
+                    raise ValueError("cannot index with a boolean indexer that is"
+                                     " not the same length as the index")
+                ranges.append(k)
+            elif com.is_list_like(k):
+                # a collection of labels to include from this level (these are or'd)
+                ranges.append(reduce(
+                    np.logical_or,[ _convert_indexer(self._get_level_indexer(x, level=i)
+                                                     ) for x in k ]))
+            elif k == slice(None):
+                # include all from this level
+                pass
+            elif isinstance(k,slice):
+                # a slice, include BOTH of the labels
+                ranges.append(self._get_level_indexer(k,level=i))
+            else:
+                # a single label
+                ranges.append(self.get_loc_level(k,level=i,drop_level=False)[0])
+
+        # identity
+        if len(ranges) == 0:
+            return slice(0,len(self))
+
+        elif len(ranges) == 1:
+            return ranges[0]
+
+        # construct a boolean indexer if we have a slice or boolean indexer
+        return reduce(np.logical_and,[ _convert_indexer(r) for r in ranges ])
 
     def truncate(self, before=None, after=None):
         """
@@ -3183,7 +3658,7 @@ class MultiIndex(Index):
             return True
 
         if not isinstance(other, MultiIndex):
-            return np.array_equal(self.values, _ensure_index(other))
+            return array_equivalent(self.values, _ensure_index(other))
 
         if self.nlevels != other.nlevels:
             return False
@@ -3196,7 +3671,7 @@ class MultiIndex(Index):
                                   allow_fill=False)
             ovalues = com.take_nd(other.levels[i].values, other.labels[i],
                                   allow_fill=False)
-            if not np.array_equal(svalues, ovalues):
+            if not array_equivalent(svalues, ovalues):
                 return False
 
         return True
@@ -3536,26 +4011,6 @@ def _sanitize_and_check(indexes):
         return indexes, 'special'
     else:
         return indexes, 'array'
-
-
-def _handle_legacy_indexes(indexes):
-    from pandas.core.daterange import DateRange
-    from pandas.tseries.index import DatetimeIndex
-
-    converted = []
-    for index in indexes:
-        if isinstance(index, DateRange):
-            if len(index) == 0:
-                kwds = dict(data=[], freq=index.offset, tz=index.tzinfo)
-            else:
-                kwds = dict(start=index[0], end=index[-1],
-                            freq=index.offset, tz=index.tzinfo)
-
-            index = DatetimeIndex(**kwds)
-
-        converted.append(index)
-
-    return converted
 
 
 def _get_consensus_names(indexes):

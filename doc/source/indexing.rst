@@ -23,7 +23,7 @@ Indexing and Selecting Data
 The axis labeling information in pandas objects serves many purposes:
 
   - Identifies data (i.e. provides *metadata*) using known indicators,
-    important for for analysis, visualization, and interactive console display
+    important for analysis, visualization, and interactive console display
   - Enables automatic and explicit data alignment
   - Allows intuitive getting and setting of subsets of the data set
 
@@ -60,7 +60,7 @@ Different Choices for Indexing (``loc``, ``iloc``, and ``ix``)
 .. versionadded:: 0.11.0
 
 Object selection has had a number of user-requested additions in order to
-support more explicit location based indexing. Pandas now supports three types
+support more explicit location based indexing. pandas now supports three types
 of multi-axis indexing.
 
 - ``.loc`` is strictly label based, will raise ``KeyError`` when the items are
@@ -77,8 +77,9 @@ of multi-axis indexing.
   See more at :ref:`Selection by Label <indexing.label>`
 
 - ``.iloc`` is strictly integer position based (from ``0`` to ``length-1`` of
-  the axis), will raise ``IndexError`` when the requested indicies are out of
-  bounds. Allowed inputs are:
+  the axis), will raise ``IndexError`` if an indexer is requested and it
+  is out-of-bounds, except *slice* indexers which allow out-of-bounds indexing.
+  (this conforms with python/numpy *slice* semantics). Allowed inputs are:
 
   - An integer e.g. ``5``
   - A list or array of integers ``[4, 3, 0]``
@@ -205,13 +206,17 @@ as an attribute:
    dfa.A
    panel.one
 
-Setting is allowed as well
+You can use attribute access to modify an existing element of a Series or column of a DataFrame, but be careful;
+if you try to use attribute access to create a new column, it fails silently, creating a new attribute rather than a
+new column.
 
 .. ipython:: python
 
    sa.a = 5
    sa
-   dfa.A = list(range(len(dfa.index)))
+   dfa.A = list(range(len(dfa.index)))       # ok if A already exists
+   dfa
+   dfa['A'] = list(range(len(dfa.index)))    # use this form to create a new column
    dfa
 
 .. warning::
@@ -270,7 +275,7 @@ Selection By Label
    This is sometimes called ``chained assignment`` and should be avoided.
    See :ref:`Returning a View versus Copy <indexing.view_versus_copy>`
 
-Pandas provides a suite of methods in order to have **purely label based indexing**. This is a strict inclusion based protocol.
+pandas provides a suite of methods in order to have **purely label based indexing**. This is a strict inclusion based protocol.
 **ALL** of the labels for which you ask, must be in the index or a ``KeyError`` will be raised! When slicing, the start bound is *included*, **AND** the stop bound is *included*. Integers are valid labels, but they refer to the label **and not the position**.
 
 The ``.loc`` attribute is the primary access method. The following are valid inputs:
@@ -341,7 +346,7 @@ Selection By Position
    This is sometimes called ``chained assignment`` and should be avoided.
    See :ref:`Returning a View versus Copy <indexing.view_versus_copy>`
 
-Pandas provides a suite of methods in order to get **purely integer based indexing**. The semantics follow closely python and numpy slicing. These are ``0-based`` indexing. When slicing, the start bounds is *included*, while the upper bound is *excluded*. Trying to use a non-integer, even a **valid** label will raise a ``IndexError``.
+pandas provides a suite of methods in order to get **purely integer based indexing**. The semantics follow closely python and numpy slicing. These are ``0-based`` indexing. When slicing, the start bounds is *included*, while the upper bound is *excluded*. Trying to use a non-integer, even a **valid** label will raise a ``IndexError``.
 
 The ``.iloc`` attribute is the primary access method. The following are valid inputs:
 
@@ -420,12 +425,28 @@ python/numpy allow slicing past the end of an array without an associated error.
     x[4:10]
     x[8:10]
 
-Pandas will detect this and raise ``IndexError``, rather than return an empty structure.
+- as of v0.14.0, ``iloc`` will now accept out-of-bounds indexers for slices, e.g. a value that exceeds the length of the object being
+  indexed. These will be excluded. This will make pandas conform more with pandas/numpy indexing of out-of-bounds
+  values. A single indexer / list of indexers that is out-of-bounds will still raise
+  ``IndexError`` (:issue:`6296`, :issue:`6299`). This could result in an empty axis (e.g. an empty DataFrame being returned)
 
-::
+.. ipython:: python
 
-    >>> df.iloc[:,3:6]
-    IndexError: out-of-bounds on slice (end)
+   dfl = DataFrame(np.random.randn(5,2),columns=list('AB'))
+   dfl
+   dfl.iloc[:,2:3]
+   dfl.iloc[:,1:3]
+   dfl.iloc[4:6]
+
+These are out-of-bounds selections
+
+.. code-block:: python
+
+   dfl.iloc[[4,5,6]]
+   IndexError: positional indexers are out-of-bounds
+
+   dfl.iloc[:,4]
+   IndexError: single positional indexer is out-of-bounds
 
 .. _indexing.basics.partial_setting:
 
@@ -767,6 +788,29 @@ If instead you don't want to or cannot name your index, you can use the name
    del old_index
 
 
+.. note::
+
+   If the name of your index overlaps with a column name, the column name is
+   given precedence. For example,
+
+   .. ipython:: python
+
+      df = DataFrame({'a': randint(5, size=5)})
+      df.index.name = 'a'
+      df.query('a > 2') # uses the column 'a', not the index
+
+   You can still use the index in a query expression by using the special
+   identifier 'index':
+
+   .. ipython:: python
+
+      df.query('index > 2')
+
+   If for some reason you have a column named ``index``, then you can refer to
+   the index as ``ilevel_0`` as well, but at this point you should consider
+   renaming your columns to something less ambiguous.
+
+
 :class:`~pandas.MultiIndex` :meth:`~pandas.DataFrame.query` Syntax
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -903,9 +947,9 @@ You can combine this with other expressions for very succinct queries:
    **expression itself** is evaluated in vanilla Python. For example, in the
    expression
 
-       .. code-block:: python
+   .. code-block:: python
 
-          df.query('a in b + c + d')
+      df.query('a in b + c + d')
 
    ``(b + c + d)`` is evaluated by ``numexpr`` and *then* the ``in``
    operation is evaluated in plain Python. In general, any operations that can
@@ -1114,7 +1158,7 @@ Advanced Indexing with ``.ix``
 
    The recent addition of ``.loc`` and ``.iloc`` have enabled users to be quite
    explicit about indexing choices. ``.ix`` allows a great flexibility to
-   specify indexing locations by *label* and/or *integer position*. Pandas will
+   specify indexing locations by *label* and/or *integer position*. pandas will
    attempt to use any passed *integer* as *label* locations first (like what
    ``.loc`` would do, then to fall back on *positional* indexing, like what
    ``.iloc``  would do). See :ref:`Fallback Indexing <indexing.fallback>` for
@@ -1221,6 +1265,15 @@ numpy array.  For instance,
 Float64Index
 ------------
 
+.. note::
+
+   As of 0.14.0, ``Float64Index`` is backed by a native ``float64`` dtype
+   array. Prior to 0.14.0, ``Float64Index`` was backed by an ``object`` dtype
+   array. Using a ``float64`` dtype in the backend speeds up arithmetic
+   operations by about 30x and boolean indexing operations on the
+   ``Float64Index`` itself are about 2x as fast.
+
+
 .. versionadded:: 0.13.0
 
 By default a ``Float64Index`` will be automatically created when passing floating, or mixed-integer-floating values in index creation.
@@ -1325,13 +1378,63 @@ Of course if you need integer based selection, then use ``iloc``
 Returning a view versus a copy
 ------------------------------
 
-The rules about when a view on the data is returned are entirely dependent on
-NumPy. Whenever an array of labels or a boolean vector are involved in the
-indexing operation, the result will be a copy. With single label / scalar
-indexing and slicing, e.g. ``df.ix[3:6]`` or ``df.ix[:, 'A']``, a view will be
-returned.
+When setting values in a pandas object, care must be taken to avoid what is called
+``chained indexing``. Here is an example.
 
-In chained expressions, the order may determine whether a copy is returned or not.
+.. ipython:: python
+
+   dfmi = DataFrame([list('abcd'),
+                     list('efgh'),
+                     list('ijkl'),
+                     list('mnop')],
+                    columns=MultiIndex.from_product([['one','two'],
+                                                     ['first','second']]))
+   dfmi
+
+Compare these two access methods:
+
+.. ipython:: python
+
+   dfmi['one']['second']
+
+.. ipython:: python
+
+   dfmi.loc[:,('one','second')]
+
+These both yield the same results, so which should you use? It is instructive to understand the order
+of operations on these and why method 2 (``.loc``) is much preferred over method 1 (chained ``[]``)
+
+``dfmi['one']`` selects the first level of the columns and returns a data frame that is singly-indexed.
+Then another python operation ``dfmi_with_one['second']`` selects the series indexed by ``'second'`` happens.
+This is indicated by the variable ``dfmi_with_one`` because pandas sees these operations as separate events.
+e.g. separate calls to ``__getitem__``, so it has to treat them as linear operations, they happen one after another.
+
+Contrast this to ``df.loc[:,('one','second')]`` which passes a nested tuple of ``(slice(None),('one','second'))`` to a single call to
+``__getitem__``. This allows pandas to deal with this as a single entity. Furthermore this order of operations *can* be significantly
+faster, and allows one to index *both* axes if so desired.
+
+Why does the assignment when using chained indexing fail!
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+So, why does this show the ``SettingWithCopy`` warning / and possibly not work when you do chained indexing and assignement:
+
+.. code-block:: python
+
+   dfmi['one']['second'] = value
+
+Since the chained indexing is 2 calls, it is possible that either call may return a **copy** of the data because of the way it is sliced.
+Thus when setting, you are actually setting a **copy**, and not the original frame data. It is impossible for pandas to figure this out because their are 2 separate python operations that are not connected.
+
+The ``SettingWithCopy`` warning is a 'heuristic' to detect this (meaning it tends to catch most cases but is simply a lightweight check). Figuring this out for real is way complicated.
+
+The ``.loc`` operation is a single python operation, and thus can select a slice (which still may be a copy), but allows pandas to assign that slice back into the frame after it is modified, thus setting the values as you would think.
+
+The reason for having the ``SettingWithCopy`` warning is this. Sometimes when you slice an array you will simply get a view back, which means you can set it no problem. However, even a single dtyped array can generate a copy if it is sliced in a particular way. A multi-dtyped DataFrame (meaning it has say ``float`` and ``object`` data), will almost always yield a copy. Whether a view is created is dependent on the memory layout of the array.
+
+Evaluation order matters
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Furthermore, in chained expressions, the order may determine whether a copy is returned or not.
 If an expression will set values on a copy of a slice, then a ``SettingWithCopy``
 exception will be raised (this raise/warn behavior is new starting in 0.13.0)
 
@@ -1406,10 +1509,10 @@ Fallback indexing
 .. _indexing.fallback:
 
 Float indexes should be used only with caution. If you have a float indexed
-``DataFrame`` and try to select using an integer, the row that Pandas returns
-might not be what you expect. Pandas first attempts to use the *integer*
+``DataFrame`` and try to select using an integer, the row that pandas returns
+might not be what you expect. pandas first attempts to use the *integer*
 as a *label* location, but fails to find a match (because the types
-are not equal). Pandas then falls back to back to positional indexing.
+are not equal). pandas then falls back to back to positional indexing.
 
 .. ipython:: python
 
@@ -1496,6 +1599,18 @@ operators:
    a & b
    a - b
 
+Also available is the ``sym_diff (^)`` operation, which returns elements
+that appear in either ``idx1`` or ``idx2`` but not both. This is
+equivalent to the Index created by ``(idx1 - idx2) + (idx2 - idx1)``,
+with duplicates dropped.
+
+.. ipython:: python
+
+   idx1 = Index([1, 2, 3, 4])
+   idx2 = Index([2, 3, 4, 5])
+   idx1.sym_diff(idx2)
+   idx1 ^ idx2
+
 The ``isin`` method of Index objects
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1539,8 +1654,12 @@ The ``MultiIndex`` object is the hierarchical analogue of the standard
 ``Index`` object which typically stores the axis labels in pandas objects. You
 can think of ``MultiIndex`` an array of tuples where each tuple is unique. A
 ``MultiIndex`` can be created from a list of arrays (using
-``MultiIndex.from_arrays``) or an array of tuples (using
-``MultiIndex.from_tuples``).
+``MultiIndex.from_arrays``), an array of tuples (using
+``MultiIndex.from_tuples``), or a crossed set of iterables (using
+``MultiIndex.from_product``).  The ``Index`` constructor will attempt to return
+a ``MultiIndex`` when it is passed a list of tuples.  The following examples
+demo different ways to initialize MultiIndexes.
+
 
 .. ipython:: python
 
@@ -1548,9 +1667,20 @@ can think of ``MultiIndex`` an array of tuples where each tuple is unique. A
              ['one', 'two', 'one', 'two', 'one', 'two', 'one', 'two']]
    tuples = list(zip(*arrays))
    tuples
+
    index = MultiIndex.from_tuples(tuples, names=['first', 'second'])
+   index
+
    s = Series(randn(8), index=index)
    s
+
+When you want every pairing of the elements in two iterables, it can be easier
+to use the ``MultiIndex.from_product`` function:
+
+.. ipython:: python
+
+   iterables = [['bar', 'baz', 'foo', 'qux'], ['one', 'two']]
+   MultiIndex.from_product(iterables, names=['first', 'second'])
 
 As a convenience, you can pass a list of arrays directly into Series or
 DataFrame to construct a MultiIndex automatically:
@@ -1638,6 +1768,10 @@ completely analogous way to selecting a column in a regular DataFrame:
    df['bar']['one']
    s['qux']
 
+See :ref:`Cross-section with hierarchical index <indexing.xs>` for how to select
+on a deeper level.
+
+
 Data alignment and using ``reindex``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1663,7 +1797,7 @@ of tuples:
 Advanced indexing with hierarchical index
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Syntactically integrating ``MultiIndex`` in advanced indexing with ``.ix`` is a
+Syntactically integrating ``MultiIndex`` in advanced indexing with ``.loc/.ix`` is a
 bit challenging, but we've made every effort to do so. for example the
 following works as you would expect:
 
@@ -1671,16 +1805,21 @@ following works as you would expect:
 
    df = df.T
    df
-   df.ix['bar']
-   df.ix['bar', 'two']
+   df.loc['bar']
+   df.loc['bar', 'two']
 
-"Partial" slicing also works quite nicely:
+"Partial" slicing also works quite nicely.
 
 .. ipython:: python
 
-   df.ix['baz':'foo']
-   df.ix[('baz', 'two'):('qux', 'one')]
-   df.ix[('baz', 'two'):'foo']
+   df.loc['baz':'foo']
+
+You can slice with a 'range' of values, by providing a slice of tuples.
+
+.. ipython:: python
+
+   df.loc[('baz', 'two'):('qux', 'one')]
+   df.loc[('baz', 'two'):'foo']
 
 Passing a list of labels or tuples works similar to reindexing:
 
@@ -1688,16 +1827,113 @@ Passing a list of labels or tuples works similar to reindexing:
 
    df.ix[[('bar', 'two'), ('qux', 'one')]]
 
-The following does not work, and it's not clear if it should or not:
+.. _indexing.mi_slicers:
 
-::
+Multiindexing using slicers
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-   >>> df.ix[['bar', 'qux']]
+.. versionadded:: 0.14.0
 
-The code for implementing ``.ix`` makes every attempt to "do the right thing"
-but as you use it you may uncover corner cases or unintuitive behavior. If you
-do find something like this, do not hesitate to report the issue or ask on the
-mailing list.
+In 0.14.0 we added a new way to slice multi-indexed objects.
+You can slice a multi-index by providing multiple indexers.
+
+You can provide any of the selectors as if you are indexing by label, see :ref:`Selection by Label <indexing.label>`,
+including slices, lists of labels, labels, and boolean indexers.
+
+You can use ``slice(None)`` to select all the contents of *that* level. You do not need to specify all the
+*deeper* levels, they will be implied as ``slice(None)``.
+
+As usual, **both sides** of the slicers are included as this is label indexing.
+
+.. warning::
+
+   You should specify all axes in the ``.loc`` specifier, meaning the indexer for the **index** and
+   for the **columns**. Their are some ambiguous cases where the passed indexer could be mis-interpreted
+   as indexing *both* axes, rather than into say the MuliIndex for the rows.
+
+   You should do this:
+
+   .. code-block:: python
+
+      df.loc[(slice('A1','A3'),.....),:]
+
+   rather than this:
+
+   .. code-block:: python
+
+      df.loc[(slice('A1','A3'),.....)]
+
+.. warning::
+
+   You will need to make sure that the selection axes are fully lexsorted!
+
+.. ipython:: python
+
+   def mklbl(prefix,n):
+       return ["%s%s" % (prefix,i)  for i in range(n)]
+
+   miindex = MultiIndex.from_product([mklbl('A',4),
+                                      mklbl('B',2),
+                                      mklbl('C',4),
+                                      mklbl('D',2)])
+   micolumns = MultiIndex.from_tuples([('a','foo'),('a','bar'),
+                                       ('b','foo'),('b','bah')],
+                                        names=['lvl0', 'lvl1'])
+   dfmi = DataFrame(np.arange(len(miindex)*len(micolumns)).reshape((len(miindex),len(micolumns))),
+                    index=miindex,
+                    columns=micolumns).sortlevel().sortlevel(axis=1)
+   dfmi
+
+Basic multi-index slicing using slices, lists, and labels.
+
+.. ipython:: python
+
+   dfmi.loc[(slice('A1','A3'),slice(None), ['C1','C3']),:]
+
+You can use a ``pd.IndexSlice`` to shortcut the creation of these slices
+
+.. ipython:: python
+
+   idx = pd.IndexSlice
+   dfmi.loc[idx[:,:,['C1','C3']],idx[:,'foo']]
+
+It is possible to perform quite complicated selections using this method on multiple
+axes at the same time.
+
+.. ipython:: python
+
+   dfmi.loc['A1',(slice(None),'foo')]
+   dfmi.loc[idx[:,:,['C1','C3']],idx[:,'foo']]
+
+Using a boolean indexer you can provide selection related to the *values*.
+
+.. ipython:: python
+
+   mask = dfmi[('a','foo')]>200
+   dfmi.loc[idx[mask,:,['C1','C3']],idx[:,'foo']]
+
+You can also specify the ``axis`` argument to ``.loc`` to interpret the passed
+slicers on a single axis.
+
+.. ipython:: python
+
+   dfmi.loc(axis=0)[:,:,['C1','C3']]
+
+Furthermore you can *set* the values using these methods
+
+.. ipython:: python
+
+   df2 = dfmi.copy()
+   df2.loc(axis=0)[:,:,['C1','C3']] = -10
+   df2
+
+You can use a right-hand-side of an alignable object as well.
+
+.. ipython:: python
+
+   df2 = dfmi.copy()
+   df2.loc[idx[:,:,['C1','C3']],:] = df2*1000
+   df2
 
 .. _indexing.xs:
 
@@ -1711,6 +1947,11 @@ selecting data at a particular level of a MultiIndex easier.
 
     df.xs('one', level='second')
 
+.. ipython:: python
+
+   # using the slicers (new in 0.14.0)
+   df.loc[(slice(None),'one'),:]
+
 You can also select on the columns with :meth:`~pandas.MultiIndex.xs`, by
 providing the axis argument
 
@@ -1719,29 +1960,38 @@ providing the axis argument
    df = df.T
    df.xs('one', level='second', axis=1)
 
+.. ipython:: python
+
+   # using the slicers (new in 0.14.0)
+   df.loc[:,(slice(None),'one')]
+
 :meth:`~pandas.MultiIndex.xs` also allows selection with multiple keys
 
 .. ipython:: python
 
    df.xs(('one', 'bar'), level=('second', 'first'), axis=1)
 
+.. ipython:: python
+
+   # using the slicers (new in 0.14.0)
+   df.loc[:,('bar','one')]
 
 .. versionadded:: 0.13.0
 
 You can pass ``drop_level=False`` to :meth:`~pandas.MultiIndex.xs` to retain
 the level that was selected
 
-.. ipython::
+.. ipython:: python
 
    df.xs('one', level='second', axis=1, drop_level=False)
 
 versus the result with ``drop_level=True`` (the default value)
 
-.. ipython::
+.. ipython:: python
 
    df.xs('one', level='second', axis=1, drop_level=True)
 
-.. ipython::
+.. ipython:: python
    :suppress:
 
    df = df.T

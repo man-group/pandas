@@ -103,7 +103,7 @@ class TestNumpy(TestPackers):
     def test_numpy_scalar_complex(self):
         x = np.complex64(np.random.rand() + 1j * np.random.rand())
         x_rec = self.encode_decode(x)
-        self.assert_(np.allclose(x, x_rec))
+        self.assertTrue(np.allclose(x, x_rec))
 
     def test_scalar_float(self):
         x = np.random.rand()
@@ -113,7 +113,7 @@ class TestNumpy(TestPackers):
     def test_scalar_complex(self):
         x = np.random.rand() + 1j * np.random.rand()
         x_rec = self.encode_decode(x)
-        self.assert_(np.allclose(x, x_rec))
+        self.assertTrue(np.allclose(x, x_rec))
 
     def test_list_numpy_float(self):
         x = [np.float32(np.random.rand()) for i in range(5)]
@@ -128,7 +128,7 @@ class TestNumpy(TestPackers):
             [np.complex128(np.random.rand() + 1j * np.random.rand())
              for i in range(5)]
         x_rec = self.encode_decode(x)
-        self.assert_(np.allclose(x, x_rec))
+        self.assertTrue(np.allclose(x, x_rec))
 
     def test_list_float(self):
         x = [np.random.rand() for i in range(5)]
@@ -139,7 +139,7 @@ class TestNumpy(TestPackers):
         x = [np.random.rand() for i in range(5)] + \
             [(np.random.rand() + 1j * np.random.rand()) for i in range(5)]
         x_rec = self.encode_decode(x)
-        self.assert_(np.allclose(x, x_rec))
+        self.assertTrue(np.allclose(x, x_rec))
 
     def test_dict_float(self):
         x = {'foo': 1.0, 'bar': 2.0}
@@ -149,8 +149,9 @@ class TestNumpy(TestPackers):
     def test_dict_complex(self):
         x = {'foo': 1.0 + 1.0j, 'bar': 2.0 + 2.0j}
         x_rec = self.encode_decode(x)
-        self.assert_(all(map(lambda x, y: x == y, x.values(), x_rec.values())) and
-                     all(map(lambda x, y: type(x) == type(y), x.values(), x_rec.values())))
+        self.assertEqual(x, x_rec)
+        for key in x:
+            self.assertEqual(type(x[key]), type(x_rec[key]))
 
     def test_dict_numpy_float(self):
         x = {'foo': np.float32(1.0), 'bar': np.float32(2.0)}
@@ -158,12 +159,12 @@ class TestNumpy(TestPackers):
         tm.assert_almost_equal(x,x_rec)
 
     def test_dict_numpy_complex(self):
-        x = {'foo': np.complex128(
-            1.0 + 1.0j), 'bar': np.complex128(2.0 + 2.0j)}
+        x = {'foo': np.complex128(1.0 + 1.0j),
+             'bar': np.complex128(2.0 + 2.0j)}
         x_rec = self.encode_decode(x)
-        self.assert_(all(map(lambda x, y: x == y, x.values(), x_rec.values())) and
-                     all(map(lambda x, y: type(x) == type(y), x.values(), x_rec.values())))
-
+        self.assertEqual(x, x_rec)
+        for key in x:
+            self.assertEqual(type(x[key]), type(x_rec[key]))
 
     def test_numpy_array_float(self):
 
@@ -178,8 +179,8 @@ class TestNumpy(TestPackers):
     def test_numpy_array_complex(self):
         x = (np.random.rand(5) + 1j * np.random.rand(5)).astype(np.complex128)
         x_rec = self.encode_decode(x)
-        self.assert_(all(map(lambda x, y: x == y, x, x_rec)) and
-                     x.dtype == x_rec.dtype)
+        self.assertTrue(all(map(lambda x, y: x == y, x, x_rec)) and
+                        x.dtype == x_rec.dtype)
 
     def test_list_mixed(self):
         x = [1.0, np.float32(3.5), np.complex128(4.25), u('foo')]
@@ -194,7 +195,7 @@ class TestBasic(TestPackers):
             '20130101'), Timestamp('20130101', tz='US/Eastern'),
                 Timestamp('201301010501')]:
             i_rec = self.encode_decode(i)
-            self.assert_(i == i_rec)
+            self.assertEqual(i, i_rec)
 
     def test_datetimes(self):
 
@@ -207,7 +208,7 @@ class TestBasic(TestPackers):
             2013, 1, 1), datetime.datetime(2013, 1, 1, 5, 1),
                 datetime.date(2013, 1, 1), np.datetime64(datetime.datetime(2013, 1, 5, 2, 15))]:
             i_rec = self.encode_decode(i)
-            self.assert_(i == i_rec)
+            self.assertEqual(i, i_rec)
 
     def test_timedeltas(self):
 
@@ -215,7 +216,7 @@ class TestBasic(TestPackers):
                   datetime.timedelta(days=1, seconds=10),
                   np.timedelta64(1000000)]:
             i_rec = self.encode_decode(i)
-            self.assert_(i == i_rec)
+            self.assertEqual(i, i_rec)
 
 
 class TestIndex(TestPackers):
@@ -244,23 +245,23 @@ class TestIndex(TestPackers):
 
         for s, i in self.d.items():
             i_rec = self.encode_decode(i)
-            self.assert_(i.equals(i_rec))
+            self.assertTrue(i.equals(i_rec))
 
         # datetime with no freq (GH5506)
         i = Index([Timestamp('20130101'),Timestamp('20130103')])
         i_rec = self.encode_decode(i)
-        self.assert_(i.equals(i_rec))
+        self.assertTrue(i.equals(i_rec))
 
         # datetime with timezone
         i = Index([Timestamp('20130101 9:00:00'),Timestamp('20130103 11:00:00')]).tz_localize('US/Eastern')
         i_rec = self.encode_decode(i)
-        self.assert_(i.equals(i_rec))
+        self.assertTrue(i.equals(i_rec))
 
     def test_multi_index(self):
 
         for s, i in self.mi.items():
             i_rec = self.encode_decode(i)
-            self.assert_(i.equals(i_rec))
+            self.assertTrue(i.equals(i_rec))
 
     def test_unicode(self):
         i = tm.makeUnicodeIndex(100)
@@ -269,7 +270,7 @@ class TestIndex(TestPackers):
         self.assertRaises(UnicodeEncodeError, self.encode_decode, i)
 
         #i_rec = self.encode_decode(i)
-        #self.assert_(i.equals(i_rec))
+        #self.assertTrue(i.equals(i_rec))
 
 
 class TestSeries(TestPackers):
@@ -359,7 +360,7 @@ class TestNDFrame(TestPackers):
         l = [self.frame['float'], self.frame['float']
              .A, self.frame['float'].B, None]
         l_rec = self.encode_decode(l)
-        self.assert_(isinstance(l_rec, tuple))
+        self.assertIsInstance(l_rec, tuple)
         check_arbitrary(l, l_rec)
 
     def test_iterator(self):
@@ -372,6 +373,17 @@ class TestNDFrame(TestPackers):
             for i, packed in enumerate(read_msgpack(path, iterator=True)):
                 check_arbitrary(packed, l[i])
 
+    def tests_datetimeindex_freq_issue(self):
+
+        # GH 5947
+        # inferring freq on the datetimeindex
+        df = DataFrame([1, 2, 3], index=date_range('1/1/2013', '1/3/2013'))
+        result = self.encode_decode(df)
+        assert_frame_equal(result, df)
+
+        df = DataFrame([1, 2], index=date_range('1/1/2013', '1/2/2013'))
+        result = self.encode_decode(df)
+        assert_frame_equal(result, df)
 
 class TestSparse(TestPackers):
 

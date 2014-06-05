@@ -10,8 +10,10 @@ import numpy as np
 from pandas.core.categorical import Categorical
 from pandas.core.index import Index, Int64Index, MultiIndex
 from pandas.core.frame import DataFrame
+from pandas.tseries.period import PeriodIndex
 from pandas.util.testing import assert_almost_equal
 import pandas.core.common as com
+from pandas.tseries.period import PeriodIndex
 
 import pandas.util.testing as tm
 
@@ -55,38 +57,38 @@ class TestCategorical(tm.TestCase):
     def test_comparisons(self):
         result = self.factor[self.factor == 'a']
         expected = self.factor[np.asarray(self.factor) == 'a']
-        self.assert_(result.equals(expected))
+        self.assertTrue(result.equals(expected))
 
         result = self.factor[self.factor != 'a']
         expected = self.factor[np.asarray(self.factor) != 'a']
-        self.assert_(result.equals(expected))
+        self.assertTrue(result.equals(expected))
 
         result = self.factor[self.factor < 'c']
         expected = self.factor[np.asarray(self.factor) < 'c']
-        self.assert_(result.equals(expected))
+        self.assertTrue(result.equals(expected))
 
         result = self.factor[self.factor > 'a']
         expected = self.factor[np.asarray(self.factor) > 'a']
-        self.assert_(result.equals(expected))
+        self.assertTrue(result.equals(expected))
 
         result = self.factor[self.factor >= 'b']
         expected = self.factor[np.asarray(self.factor) >= 'b']
-        self.assert_(result.equals(expected))
+        self.assertTrue(result.equals(expected))
 
         result = self.factor[self.factor <= 'b']
         expected = self.factor[np.asarray(self.factor) <= 'b']
-        self.assert_(result.equals(expected))
+        self.assertTrue(result.equals(expected))
 
         n = len(self.factor)
 
         other = self.factor[np.random.permutation(n)]
         result = self.factor == other
         expected = np.asarray(self.factor) == np.asarray(other)
-        self.assert_(np.array_equal(result, expected))
+        self.assert_numpy_array_equal(result, expected)
 
         result = self.factor == 'd'
         expected = np.repeat(False, len(self.factor))
-        self.assert_(np.array_equal(result, expected))
+        self.assert_numpy_array_equal(result, expected)
 
     def test_na_flags_int_levels(self):
         # #1457
@@ -98,12 +100,12 @@ class TestCategorical(tm.TestCase):
         cat = Categorical(labels, levels)
         repr(cat)
 
-        self.assert_(np.array_equal(com.isnull(cat), labels == -1))
+        self.assert_numpy_array_equal(com.isnull(cat), labels == -1)
 
     def test_levels_none(self):
         factor = Categorical(['a', 'b', 'b', 'a',
                               'a', 'c', 'c', 'c'])
-        self.assert_(factor.equals(self.factor))
+        self.assertTrue(factor.equals(self.factor))
 
     def test_describe(self):
         # string type
@@ -133,7 +135,7 @@ class TestCategorical(tm.TestCase):
         sub = "Index([a, b, c]"
         actual = re.sub(pat, sub, actual)
 
-        self.assertEquals(actual, expected)
+        self.assertEqual(actual, expected)
 
     def test_big_print(self):
         factor = Categorical([0,1,2,0,1,2]*100, ['a', 'b', 'c'], name='cat')
@@ -150,7 +152,7 @@ class TestCategorical(tm.TestCase):
         sub = "Index([a, b, c]"
         actual = re.sub(pat, sub, actual)
 
-        self.assertEquals(actual, expected)
+        self.assertEqual(actual, expected)
 
     def test_empty_print(self):
         factor = Categorical([], ["a","b","c"], name="cat")
@@ -179,6 +181,38 @@ class TestCategorical(tm.TestCase):
         expected = ("Categorical([], Levels (0): "
                     "Index([], dtype=object)")
         self.assertEqual(repr(factor), expected)
+
+    def test_periodindex(self):
+        idx1 = PeriodIndex(['2014-01', '2014-01', '2014-02', '2014-02',
+                            '2014-03', '2014-03'], freq='M')
+        cat1 = Categorical.from_array(idx1)
+
+        exp_arr = np.array([0, 0, 1, 1, 2, 2])
+        exp_idx = PeriodIndex(['2014-01', '2014-02', '2014-03'], freq='M')
+
+        self.assert_numpy_array_equal(cat1.labels, exp_arr)
+        self.assertTrue(cat1.levels.equals(exp_idx))
+
+
+        idx2 = PeriodIndex(['2014-03', '2014-03', '2014-02', '2014-01',
+                            '2014-03', '2014-01'], freq='M')
+        cat2 = Categorical.from_array(idx2)
+
+        exp_arr = np.array([2, 2, 1, 0, 2, 0])
+
+        self.assert_numpy_array_equal(cat2.labels, exp_arr)
+        self.assertTrue(cat2.levels.equals(exp_idx))
+
+        idx3 = PeriodIndex(['2013-12', '2013-11', '2013-10', '2013-09',
+                            '2013-08', '2013-07', '2013-05'], freq='M')
+        cat3 = Categorical.from_array(idx3)
+
+        exp_arr = np.array([6, 5, 4, 3, 2, 1, 0])
+        exp_idx = PeriodIndex(['2013-05', '2013-07', '2013-08', '2013-09',
+                               '2013-10', '2013-11', '2013-12'], freq='M')
+
+        self.assert_numpy_array_equal(cat3.labels, exp_arr)
+        self.assertTrue(cat3.levels.equals(exp_idx))
 
 
 if __name__ == '__main__':

@@ -76,18 +76,18 @@ class TestCut(tm.TestCase):
         result, bins = cut(arr, 4, retbins=True)
         ex_levels = ['(-0.001, 0.25]', '(0.25, 0.5]', '(0.5, 0.75]',
                      '(0.75, 1]']
-        self.assert_(np.array_equal(result.levels, ex_levels))
+        self.assert_numpy_array_equal(result.levels, ex_levels)
 
         result, bins = cut(arr, 4, retbins=True, right=False)
         ex_levels = ['[0, 0.25)', '[0.25, 0.5)', '[0.5, 0.75)',
                      '[0.75, 1.001)']
-        self.assert_(np.array_equal(result.levels, ex_levels))
+        self.assert_numpy_array_equal(result.levels, ex_levels)
 
     def test_cut_pass_series_name_to_factor(self):
         s = Series(np.random.randn(100), name='foo')
 
         factor = cut(s, 4)
-        self.assertEquals(factor.name, 'foo')
+        self.assertEqual(factor.name, 'foo')
 
     def test_label_precision(self):
         arr = np.arange(0, 0.73, 0.01)
@@ -95,7 +95,7 @@ class TestCut(tm.TestCase):
         result = cut(arr, 4, precision=2)
         ex_levels = ['(-0.00072, 0.18]', '(0.18, 0.36]', '(0.36, 0.54]',
                      '(0.54, 0.72]']
-        self.assert_(np.array_equal(result.levels, ex_levels))
+        self.assert_numpy_array_equal(result.levels, ex_levels)
 
     def test_na_handling(self):
         arr = np.arange(0, 0.75, 0.01)
@@ -124,10 +124,10 @@ class TestCut(tm.TestCase):
 
         np.testing.assert_array_equal(result.levels, ex_levels)
         np.testing.assert_array_equal(result_ser.levels, ex_levels)
-        self.assertEquals(result[5], '(4, inf]')
-        self.assertEquals(result[0], '(-inf, 2]')
-        self.assertEquals(result_ser[5], '(4, inf]')
-        self.assertEquals(result_ser[0], '(-inf, 2]')
+        self.assertEqual(result[5], '(4, inf]')
+        self.assertEqual(result[0], '(-inf, 2]')
+        self.assertEqual(result_ser[5], '(4, inf]')
+        self.assertEqual(result_ser[0], '(-inf, 2]')
 
     def test_qcut(self):
         arr = np.random.randn(1000)
@@ -137,20 +137,20 @@ class TestCut(tm.TestCase):
         assert_almost_equal(bins, ex_bins)
 
         ex_levels = cut(arr, ex_bins, include_lowest=True)
-        self.assert_(np.array_equal(labels, ex_levels))
+        self.assert_numpy_array_equal(labels, ex_levels)
 
     def test_qcut_bounds(self):
         arr = np.random.randn(1000)
 
         factor = qcut(arr, 10, labels=False)
-        self.assert_(len(np.unique(factor)) == 10)
+        self.assertEqual(len(np.unique(factor)), 10)
 
     def test_qcut_specify_quantiles(self):
         arr = np.random.randn(100)
 
         factor = qcut(arr, [0, .25, .5, .75, 1.])
         expected = qcut(arr, 4)
-        self.assert_(factor.equals(expected))
+        self.assertTrue(factor.equals(expected))
 
     def test_qcut_all_bins_same(self):
         assertRaisesRegexp(ValueError, "edges.*unique", qcut, [0,0,0,0,0,0,0,0,0,0], 3)
@@ -162,7 +162,7 @@ class TestCut(tm.TestCase):
 
         mask = result.labels == -1
         ex_mask = (arr < -1) | (arr > 1)
-        self.assert_(np.array_equal(mask, ex_mask))
+        self.assert_numpy_array_equal(mask, ex_mask)
 
     def test_cut_pass_labels(self):
         arr = [50, 5, 10, 15, 20, 30, 70]
@@ -174,7 +174,7 @@ class TestCut(tm.TestCase):
         exp = cut(arr, bins)
         exp.levels = labels
 
-        self.assert_(result.equals(exp))
+        self.assertTrue(result.equals(exp))
 
     def test_qcut_include_lowest(self):
         values = np.arange(10)
@@ -182,17 +182,17 @@ class TestCut(tm.TestCase):
         cats = qcut(values, 4)
 
         ex_levels = ['[0, 2.25]', '(2.25, 4.5]', '(4.5, 6.75]', '(6.75, 9]']
-        self.assert_((cats.levels == ex_levels).all())
+        self.assertTrue((cats.levels == ex_levels).all())
 
     def test_qcut_nas(self):
         arr = np.random.randn(100)
         arr[:20] = np.nan
 
         result = qcut(arr, 4)
-        self.assert_(com.isnull(result[:20]).all())
+        self.assertTrue(com.isnull(result[:20]).all())
 
     def test_label_formatting(self):
-        self.assertEquals(tmod._trim_zeros('1.000'), '1')
+        self.assertEqual(tmod._trim_zeros('1.000'), '1')
 
         # it works
         result = cut(np.arange(11.), 2)
@@ -202,9 +202,9 @@ class TestCut(tm.TestCase):
         # #1979, negative numbers
 
         result = tmod._format_label(-117.9998, precision=3)
-        self.assertEquals(result, '-118')
+        self.assertEqual(result, '-118')
         result = tmod._format_label(117.9998, precision=3)
-        self.assertEquals(result, '118')
+        self.assertEqual(result, '118')
 
     def test_qcut_binning_issues(self):
         # #1978, 1979

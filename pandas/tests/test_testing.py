@@ -8,7 +8,8 @@ import numpy as np
 import sys
 from pandas import Series
 from pandas.util.testing import (
-    assert_almost_equal, assertRaisesRegexp, raise_with_traceback, assert_series_equal
+    assert_almost_equal, assertRaisesRegexp, raise_with_traceback, assert_series_equal,
+    RNGContext
 )
 
 # let's get meta.
@@ -153,3 +154,33 @@ class TestAssertSeriesEqual(unittest.TestCase):
         # ATM meta data is not checked in assert_series_equal
         # self._assert_not_equal(Series(range(3)),Series(range(3),name='foo'),check_names=True)
 
+    def test_less_precise(self):
+        s1 =  Series([0.12345],dtype='float64')
+        s2 =  Series([0.12346],dtype='float64')
+
+        self.assertRaises(AssertionError, assert_series_equal, s1, s2)
+        self._assert_equal(s1,s2,check_less_precise=True)
+
+        s1 =  Series([0.12345],dtype='float32')
+        s2 =  Series([0.12346],dtype='float32')
+
+        self.assertRaises(AssertionError, assert_series_equal, s1, s2)
+        self._assert_equal(s1,s2,check_less_precise=True)
+
+        # even less than less precise
+        s1 =  Series([0.1235],dtype='float32')
+        s2 =  Series([0.1236],dtype='float32')
+
+        self.assertRaises(AssertionError, assert_series_equal, s1, s2)
+        self.assertRaises(AssertionError, assert_series_equal, s1, s2, True)
+
+class TestRNGContext(unittest.TestCase):
+
+    def test_RNGContext(self):
+        expected0 = 1.764052345967664
+        expected1 = 1.6243453636632417
+
+        with RNGContext(0):
+            with RNGContext(1):
+                self.assertEqual(np.random.randn(), expected1)
+            self.assertEqual(np.random.randn(), expected0)

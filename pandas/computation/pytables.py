@@ -7,25 +7,24 @@ from functools import partial
 from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
-from pandas.compat import u, string_types, PY3
+from pandas.compat import u, string_types, PY3, DeepChainMap
 from pandas.core.base import StringMixin
 import pandas.core.common as com
 from pandas.computation import expr, ops
-from pandas.computation.ops import is_term
+from pandas.computation.ops import is_term, UndefinedVariableError
+from pandas.computation.scope import _ensure_scope
 from pandas.computation.expr import BaseExprVisitor
 from pandas.computation.common import _ensure_decoded
 from pandas.tseries.timedeltas import _coerce_scalar_to_timedelta_type
 
 
 class Scope(expr.Scope):
-    __slots__ = 'globals', 'locals', 'queryables'
+    __slots__ = 'queryables',
 
-    def __init__(self, gbls=None, lcls=None, queryables=None, level=1):
-        super(
-            Scope,
-            self).__init__(gbls=gbls,
-                           lcls=lcls,
-                           level=level)
+    def __init__(self, level, global_dict=None, local_dict=None,
+                 queryables=None):
+        super(Scope, self).__init__(level + 1, global_dict=global_dict,
+                                    local_dict=local_dict)
         self.queryables = queryables or dict()
 
 
@@ -34,9 +33,7 @@ class Term(ops.Term):
     def __new__(cls, name, env, side=None, encoding=None):
         klass = Constant if not isinstance(name, string_types) else cls
         supr_new = StringMixin.__new__
-        if PY3:
-            return supr_new(klass)
-        return supr_new(klass, name, env, side=side, encoding=encoding)
+        return supr_new(klass)
 
     def __init__(self, name, env, side=None, encoding=None):
         super(Term, self).__init__(name, env, side=side, encoding=encoding)
@@ -48,9 +45,11 @@ class Term(ops.Term):
                 raise NameError('name {0!r} is not defined'.format(self.name))
             return self.name
 
-        # resolve the rhs (and allow to be None)
-        return self.env.locals.get(self.name,
-                                   self.env.globals.get(self.name, self.name))
+        # resolve the rhs (and allow it to be None)
+        try:
+            return self.env.resolve(self.name, is_local=False)
+        except UndefinedVariableError:
+            return self.name
 
     @property
     def value(self):
@@ -65,10 +64,6 @@ class Constant(Term):
 
     def _resolve_name(self):
         return self._name
-
-    @property
-    def name(self):
-        return self._value
 
 
 class BinOp(ops.BinOp):
@@ -232,9 +227,6 @@ class FilterBinOp(BinOp):
 
     def evaluate(self):
 
-        if not isinstance(self.lhs, string_types):
-            return self
-
         if not self.is_valid:
             raise ValueError("query term is not valid [%s]" % self)
 
@@ -305,9 +297,6 @@ class ConditionBinOp(BinOp):
         return self.condition
 
     def evaluate(self):
-
-        if not isinstance(self.lhs, string_types):
-            return self
 
         if not self.is_valid:
             raise ValueError("query term is not valid [%s]" % self)
@@ -388,9 +377,6 @@ class ExprVisitor(BaseExprVisitor):
             return self.const_type(-self.visit(node.operand).value, self.env)
         elif isinstance(node.op, ast.UAdd):
             raise NotImplementedError('Unary addition not supported')
-
-    def visit_USub(self, node, **kwargs):
-        return self.const_type(-self.visit(node.operand).value, self.env)
 
     def visit_Index(self, node, **kwargs):
         return self.visit(node.value).value
@@ -478,7 +464,7 @@ class Expr(expr.Expr):
     """
 
     def __init__(self, where, op=None, value=None, queryables=None,
-                 encoding=None, scope_level=None):
+                 encoding=None, scope_level=0):
 
         # try to be back compat
         where = self.parse_back_compat(where, op, value)
@@ -489,26 +475,24 @@ class Expr(expr.Expr):
         self.terms = None
         self._visitor = None
 
-        # capture the environement if needed
-        lcls = dict()
-        if isinstance(where, Expr):
+        # capture the environment if needed
+        local_dict = DeepChainMap()
 
-            lcls.update(where.env.locals)
+        if isinstance(where, Expr):
+            local_dict = where.env.scope
             where = where.expr
 
         elif isinstance(where, (list, tuple)):
-
-            for w in where:
+            for idx, w in enumerate(where):
                 if isinstance(w, Expr):
-                    lcls.update(w.env.locals)
+                    local_dict = w.env.scope
                 else:
                     w = self.parse_back_compat(w)
-
+                    where[idx] = w
             where = ' & ' .join(["(%s)" % w for w in where])
 
         self.expr = where
-        self.env = Scope(lcls=lcls)
-        self.env.update(scope_level)
+        self.env = Scope(scope_level + 1, local_dict=local_dict)
 
         if queryables is not None and isinstance(self.expr, string_types):
             self.env.queryables.update(queryables)
@@ -526,6 +510,15 @@ class Expr(expr.Expr):
                 raise TypeError(
                     "where must be passed as a string if op/value are passed")
             warnings.warn("passing a dict to Expr is deprecated, "
+                          "pass the where as a single string",
+                          DeprecationWarning)
+        if isinstance(w, tuple):
+            if len(w) == 2:
+                w, value = w
+                op = '=='
+            elif len(w) == 3:
+                w, op, value = w
+            warnings.warn("passing a tuple into Expr is deprecated, "
                           "pass the where as a single string",
                           DeprecationWarning)
 

@@ -8,7 +8,7 @@ from datetime import timedelta
 import numpy as np
 import pandas.tslib as tslib
 from pandas import compat, _np_version_under1p7
-from pandas.core.common import (ABCSeries, is_integer, is_timedelta64_dtype,
+from pandas.core.common import (ABCSeries, is_integer, is_integer_dtype, is_timedelta64_dtype,
                                 _values_from_object, is_list_like, isnull)
 
 repr_timedelta = tslib.repr_timedelta64
@@ -23,7 +23,7 @@ def to_timedelta(arg, box=True, unit='ns'):
     arg : string, timedelta, array of strings (with possible NAs)
     box : boolean, default True
         If True returns a Series of the results, if False returns ndarray of values
-    unit : unit of the arg (D,s,ms,us,ns) denote the unit, which is an integer/float number
+    unit : unit of the arg (D,h,m,s,ms,us,ns) denote the unit, which is an integer/float number
 
     Returns
     -------
@@ -32,18 +32,24 @@ def to_timedelta(arg, box=True, unit='ns'):
     if _np_version_under1p7:
         raise ValueError("to_timedelta is not support for numpy < 1.7")
 
-    def _convert_listlike(arg, box):
+    def _convert_listlike(arg, box, unit):
 
         if isinstance(arg, (list,tuple)):
             arg = np.array(arg, dtype='O')
 
         if is_timedelta64_dtype(arg):
-            if box:
-                from pandas import Series
-                return Series(arg,dtype='m8[ns]')
-            return arg
+            value = arg.astype('timedelta64[ns]')
+        elif is_integer_dtype(arg):
+            unit = _validate_timedelta_unit(unit)
 
-        value = np.array([ _coerce_scalar_to_timedelta_type(r, unit=unit) for r in arg ])
+            # these are shortcutable
+            value = arg.astype('timedelta64[{0}]'.format(unit)).astype('timedelta64[ns]')
+        else:
+            try:
+                value = tslib.array_to_timedelta64(_ensure_object(arg),unit=unit)
+            except:
+                value = np.array([ _coerce_scalar_to_timedelta_type(r, unit=unit) for r in arg ])
+
         if box:
             from pandas import Series
             value = Series(value,dtype='m8[ns]')
@@ -53,59 +59,42 @@ def to_timedelta(arg, box=True, unit='ns'):
         return arg
     elif isinstance(arg, ABCSeries):
         from pandas import Series
-        values = _convert_listlike(arg.values, box=False)
+        values = _convert_listlike(arg.values, box=False, unit=unit)
         return Series(values, index=arg.index, name=arg.name, dtype='m8[ns]')
     elif is_list_like(arg):
-        return _convert_listlike(arg, box=box)
+        return _convert_listlike(arg, box=box, unit=unit)
 
     # ...so it must be a scalar value. Return scalar.
     return _coerce_scalar_to_timedelta_type(arg, unit=unit)
 
+def _validate_timedelta_unit(arg):
+    """ provide validation / translation for timedelta short units """
+
+    if re.search("Y|W|D",arg,re.IGNORECASE) or arg == 'M':
+        return arg.upper()
+    elif re.search("h|m|s|ms|us|ns",arg,re.IGNORECASE):
+        return arg.lower()
+    raise ValueError("invalid timedelta unit {0} provided".format(arg))
+
 _short_search = re.compile(
     "^\s*(?P<neg>-?)\s*(?P<value>\d*\.?\d*)\s*(?P<unit>d|s|ms|us|ns)?\s*$",re.IGNORECASE)
 _full_search = re.compile(
-    "^\s*(?P<neg>-?)\s*(?P<days>\d+)?\s*(days|d)?,?\s*(?P<time>\d{2}:\d{2}:\d{2})?(?P<frac>\.\d+)?\s*$",re.IGNORECASE)
+    "^\s*(?P<neg>-?)\s*(?P<days>\d+)?\s*(days|d|day)?,?\s*(?P<time>\d{2}:\d{2}:\d{2})?(?P<frac>\.\d+)?\s*$",re.IGNORECASE)
 _nat_search = re.compile(
     "^\s*(nat|nan)\s*$",re.IGNORECASE)
 _whitespace = re.compile('^\s*$')
 
 def _coerce_scalar_to_timedelta_type(r, unit='ns'):
-    # kludgy here until we have a timedelta scalar
-    # handle the numpy < 1.7 case
-
-    def conv(v):
-        if _np_version_under1p7:
-            return timedelta(microseconds=v/1000.0)
-        return np.timedelta64(v)
+    """ convert strings to timedelta; coerce to np.timedelta64"""
 
     if isinstance(r, compat.string_types):
+
+        # we are already converting to nanoseconds
         converter = _get_string_converter(r, unit=unit)
         r = converter()
-        r = conv(r)
-    elif r == tslib.iNaT:
-        return r
-    elif isnull(r):
-        return np.timedelta64('NaT')
-    elif isinstance(r, np.timedelta64):
-        r = r.astype("m8[{0}]".format(unit.lower()))
-    elif is_integer(r):
-        r = tslib.cast_from_unit(r, unit)
-        r = conv(r)
+        unit='ns'
 
-    if _np_version_under1p7:
-        if not isinstance(r, timedelta):
-            raise AssertionError("Invalid type for timedelta scalar: %s" % type(r))
-        if compat.PY3:
-            # convert to microseconds in timedelta64
-            r = np.timedelta64(int(r.total_seconds()*1e9 + r.microseconds*1000))
-        else:
-            return r
-
-    if isinstance(r, timedelta):
-        r = np.timedelta64(r)
-    elif not isinstance(r, np.timedelta64):
-        raise AssertionError("Invalid type for timedelta scalar: %s" % type(r))
-    return r.astype('timedelta64[ns]')
+    return tslib.convert_to_timedelta(r,unit)
 
 def _get_string_converter(r, unit='ns'):
     """ return a string converter for r to process the timedelta format """
@@ -165,14 +154,15 @@ def _get_string_converter(r, unit='ns'):
         return convert
 
     # no converter
-    raise ValueError("cannot create timedelta string converter")
+    raise ValueError("cannot create timedelta string converter for [{0}]".format(r))
 
-def _possibly_cast_to_timedelta(value, coerce=True):
+def _possibly_cast_to_timedelta(value, coerce=True, dtype=None):
     """ try to cast to timedelta64, if already a timedeltalike, then make
         sure that we are [ns] (as numpy 1.6.2 is very buggy in this regards,
         don't force the conversion unless coerce is True
 
         if coerce='compat' force a compatibilty coercerion (to timedeltas) if needeed
+        if dtype is passed then this is the target dtype
         """
 
     # coercion compatability
@@ -189,7 +179,7 @@ def _possibly_cast_to_timedelta(value, coerce=True):
                     td *= 1000
                 return td
 
-            if td == tslib.compat_NaT:
+            if isnull(td) or td == tslib.compat_NaT or td == tslib.iNaT:
                 return tslib.iNaT
 
             # convert td value to a nanosecond value
@@ -212,10 +202,16 @@ def _possibly_cast_to_timedelta(value, coerce=True):
         return np.array([ convert(v,dtype) for v in value ], dtype='m8[ns]')
 
     # deal with numpy not being able to handle certain timedelta operations
-    if isinstance(value, (ABCSeries, np.ndarray)) and value.dtype.kind == 'm':
-        if value.dtype != 'timedelta64[ns]':
+    if isinstance(value, (ABCSeries, np.ndarray)):
+
+        # i8 conversions
+        if value.dtype == 'int64' and np.dtype(dtype) == 'timedelta64[ns]':
             value = value.astype('timedelta64[ns]')
-        return value
+            return value
+        elif value.dtype.kind == 'm':
+            if value.dtype != 'timedelta64[ns]':
+                value = value.astype('timedelta64[ns]')
+            return value
 
     # we don't have a timedelta, but we want to try to convert to one (but
     # don't force it)

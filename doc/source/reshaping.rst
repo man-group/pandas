@@ -199,9 +199,9 @@ the right thing:
 Reshaping by Melt
 -----------------
 
-The ``melt`` function found in ``pandas.core.reshape`` is useful to massage a
+The :func:`~pandas.melt` function is useful to massage a
 DataFrame into a format where one or more columns are identifier variables,
-while all other columns, considered measured variables, are "pivoted" to the
+while all other columns, considered measured variables, are "unpivoted" to the
 row axis, leaving just two non-identifier columns, "variable" and "value". The
 names of those columns can be customized by supplying the ``var_name`` and
 ``value_name`` parameters.
@@ -229,7 +229,7 @@ Another way to transform is to use the ``wide_to_long`` panel data convenience f
                       "X"     : dict(zip(range(3), np.random.randn(3)))
                      })
   dft["id"] = dft.index
-  df
+  dft
   pd.wide_to_long(dft, ["A", "B"], i="id", j="year")
 
 Combining with stats and GroupBy
@@ -264,28 +264,33 @@ It takes a number of arguments
 
 - ``data``: A DataFrame object
 - ``values``: a column or a list of columns to aggregate
-- ``rows``: list of columns to group by on the table rows
-- ``cols``: list of columns to group by on the table columns
+- ``index``: a column, Grouper, array which has the same length as data, or list of them.
+  Keys to group by on the pivot table index. If an array is passed, it is being used as the same manner as column values.
+- ``columns``: a column, Grouper, array which has the same length as data, or list of them.
+  Keys to group by on the pivot table column. If an array is passed, it is being used as the same manner as column values.
 - ``aggfunc``: function to use for aggregation, defaulting to ``numpy.mean``
 
 Consider a data set like this:
 
 .. ipython:: python
 
+   import datetime
    df = DataFrame({'A' : ['one', 'one', 'two', 'three'] * 6,
                    'B' : ['A', 'B', 'C'] * 8,
                    'C' : ['foo', 'foo', 'foo', 'bar', 'bar', 'bar'] * 4,
                    'D' : np.random.randn(24),
-                   'E' : np.random.randn(24)})
+                   'E' : np.random.randn(24),
+                   'F' : [datetime.datetime(2013, i, 1) for i in range(1, 13)] +
+                         [datetime.datetime(2013, i, 15) for i in range(1, 13)]})
    df
 
 We can produce pivot tables from this data very easily:
 
 .. ipython:: python
 
-   pivot_table(df, values='D', rows=['A', 'B'], cols=['C'])
-   pivot_table(df, values='D', rows=['B'], cols=['A', 'C'], aggfunc=np.sum)
-   pivot_table(df, values=['D','E'], rows=['B'], cols=['A', 'C'], aggfunc=np.sum)
+   pivot_table(df, values='D', index=['A', 'B'], columns=['C'])
+   pivot_table(df, values='D', index=['B'], columns=['A', 'C'], aggfunc=np.sum)
+   pivot_table(df, values=['D','E'], index=['B'], columns=['A', 'C'], aggfunc=np.sum)
 
 The result object is a DataFrame having potentially hierarchical indexes on the
 rows and columns. If the ``values`` column name is not given, the pivot table
@@ -294,14 +299,20 @@ hierarchy in the columns:
 
 .. ipython:: python
 
-   pivot_table(df, rows=['A', 'B'], cols=['C'])
+   pivot_table(df, index=['A', 'B'], columns=['C'])
+
+Also, you can use ``Grouper`` for ``index`` and ``columns`` keywords. For detail of ``Grouper``, see :ref:`Grouping with a Grouper specification <groupby.specify>`.
+
+.. ipython:: python
+
+   pivot_table(df, values='D', index=Grouper(freq='M', key='F'), columns='C')
 
 You can render a nice output of the table omitting the missing values by
 calling ``to_string`` if you wish:
 
 .. ipython:: python
 
-   table = pivot_table(df, rows=['A', 'B'], cols=['C'])
+   table = pivot_table(df, index=['A', 'B'], columns=['C'])
    print(table.to_string(na_rep=''))
 
 Note that ``pivot_table`` is also available as an instance method on DataFrame.
@@ -315,8 +326,8 @@ unless an array of values and an aggregation function are passed.
 
 It takes a number of arguments
 
-- ``rows``: array-like, values to group by in the rows
-- ``cols``: array-like, values to group by in the columns
+- ``index``: array-like, values to group by in the rows
+- ``columns``: array-like, values to group by in the columns
 - ``values``: array-like, optional, array of values to aggregate according to
   the factors
 - ``aggfunc``: function, optional, If no values array is passed, computes a
@@ -350,7 +361,7 @@ rows and columns:
 
 .. ipython:: python
 
-   df.pivot_table(rows=['A', 'B'], cols='C', margins=True, aggfunc=np.std)
+   df.pivot_table(index=['A', 'B'], columns='C', margins=True, aggfunc=np.std)
 
 .. _reshaping.tile:
 
@@ -418,6 +429,8 @@ This function is often used along with discretization functions like ``cut``:
 
    get_dummies(cut(values, bins))
 
+See also :func:`Series.str.get_dummies <pandas.core.strings.StringMethods.get_dummies>`.
+
 Factorizing values
 ------------------
 
@@ -434,8 +447,12 @@ To encode 1-d values as an enumerated type use ``factorize``:
 Note that ``factorize`` is similar to ``numpy.unique``, but differs in its
 handling of NaN:
 
+.. note::
+   The following ``numpy.unique`` will fail under Python 3 with a ``TypeError``
+   because of an ordering bug. See also
+   `Here <https://github.com/numpy/numpy/issues/641>`__
+
 .. ipython:: python
 
    pd.factorize(x, sort=True)
    np.unique(x, return_inverse=True)[::-1]
-

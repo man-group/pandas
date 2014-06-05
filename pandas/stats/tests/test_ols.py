@@ -294,14 +294,14 @@ class TestOLSMisc(tm.TestCase):
         assert_series_equal(model1.beta, model2.beta)
 
         # TODO: can we infer whether the intercept is there...
-        self.assert_(model1.r2 != model2.r2)
+        self.assertNotEqual(model1.r2, model2.r2)
 
         # rolling
 
         model1 = ols(y=y, x=x, window=20)
         model2 = ols(y=y, x=x_with, window=20, intercept=False)
         assert_frame_equal(model1.beta, model2.beta)
-        self.assert_((model1.r2 != model2.r2).all())
+        self.assertTrue((model1.r2 != model2.r2).all())
 
     def test_summary_many_terms(self):
         x = DataFrame(np.random.randn(100, 20))
@@ -361,7 +361,7 @@ class TestOLSMisc(tm.TestCase):
         model = ols(y=endog, x=exog)
 
         pred = model.y_predict
-        self.assert_(pred.index.equals(exog.index))
+        self.assertTrue(pred.index.equals(exog.index))
 
     def test_longpanel_series_combo(self):
         wp = tm.makePanel()
@@ -369,7 +369,7 @@ class TestOLSMisc(tm.TestCase):
 
         y = lp.pop('ItemA')
         model = ols(y=y, x=lp, entity_effects=True, window=20)
-        self.assert_(notnull(model.beta.values).all())
+        self.assertTrue(notnull(model.beta.values).all())
         tm.assert_isinstance(model, PanelOLS)
         model.summary
 
@@ -881,7 +881,7 @@ class TestOLSFilter(tm.TestCase):
         self.tsAssertEqual(exp_rhs2, rhs['x2'])
 
     def tsAssertEqual(self, ts1, ts2):
-        self.assert_(np.array_equal(ts1, ts2))
+        self.assert_numpy_array_equal(ts1, ts2)
 
 
 if __name__ == '__main__':

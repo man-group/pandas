@@ -7,7 +7,6 @@
 
    import os
    import csv
-   from StringIO import StringIO
    import pandas as pd
 
    import numpy as np
@@ -49,7 +48,7 @@ Yahoo! Finance
     import pandas.io.data as web
     import datetime
     start = datetime.datetime(2010, 1, 1)
-    end = datetime.datetime(2013, 01, 27)
+    end = datetime.datetime(2013, 1, 27)
     f=web.DataReader("F", 'yahoo', start, end)
     f.ix['2010-01-04']
 
@@ -63,7 +62,7 @@ Google Finance
     import pandas.io.data as web
     import datetime
     start = datetime.datetime(2010, 1, 1)
-    end = datetime.datetime(2013, 01, 27)
+    end = datetime.datetime(2013, 1, 27)
     f=web.DataReader("F", 'google', start, end)
     f.ix['2010-01-04']
 
@@ -77,7 +76,7 @@ FRED
     import pandas.io.data as web
     import datetime
     start = datetime.datetime(2010, 1, 1)
-    end = datetime.datetime(2013, 01, 27)
+    end = datetime.datetime(2013, 1, 27)
     gdp=web.DataReader("GDP", "fred", start, end)
     gdp.ix['2013-01-01']
 
@@ -103,7 +102,7 @@ Dataset names are listed at `Fama/French Data Library
 World Bank
 ----------
 
-``Pandas`` users can easily access thousands of panel data series from the
+``pandas`` users can easily access thousands of panel data series from the
 `World Bank's World Development Indicators <http://data.worldbank.org>`__
 by using the ``wb`` I/O functions.
 
@@ -171,7 +170,7 @@ contracts around the world.
     4027      IT.MOB.COV.ZS  Population coverage of mobile cellular telepho...
 
 Notice that this second search was much faster than the first one because
-``Pandas`` now has a cached list of available data series.
+``pandas`` now has a cached list of available data series.
 
 .. code-block:: python
 

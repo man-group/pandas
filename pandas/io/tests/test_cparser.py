@@ -70,7 +70,7 @@ class TestCParser(tm.TestCase):
         data = 'a\nb\na\nb\na'
         reader = TextReader(StringIO(data), header=None)
         result = reader.read()
-        self.assert_(len(set(map(id, result[0]))) == 2)
+        self.assertEqual(len(set(map(id, result[0]))), 2)
 
     def test_skipinitialspace(self):
         data = ('a,   b\n'
@@ -82,8 +82,8 @@ class TestCParser(tm.TestCase):
                             header=None)
         result = reader.read()
 
-        self.assert_(np.array_equal(result[0], ['a', 'a', 'a', 'a']))
-        self.assert_(np.array_equal(result[1], ['b', 'b', 'b', 'b']))
+        self.assert_numpy_array_equal(result[0], ['a', 'a', 'a', 'a'])
+        self.assert_numpy_array_equal(result[1], ['b', 'b', 'b', 'b'])
 
     def test_parse_booleans(self):
         data = 'True\nFalse\nTrue\nTrue'
@@ -91,7 +91,7 @@ class TestCParser(tm.TestCase):
         reader = TextReader(StringIO(data), header=None)
         result = reader.read()
 
-        self.assert_(result[0].dtype == np.bool_)
+        self.assertEqual(result[0].dtype, np.bool_)
 
     def test_delimit_whitespace(self):
         data = 'a  b\na\t\t "b"\n"a"\t \t b'
@@ -100,8 +100,8 @@ class TestCParser(tm.TestCase):
                             header=None)
         result = reader.read()
 
-        self.assert_(np.array_equal(result[0], ['a', 'a', 'a']))
-        self.assert_(np.array_equal(result[1], ['b', 'b', 'b']))
+        self.assert_numpy_array_equal(result[0], ['a', 'a', 'a'])
+        self.assert_numpy_array_equal(result[1], ['b', 'b', 'b'])
 
     def test_embedded_newline(self):
         data = 'a\n"hello\nthere"\nthis'
@@ -110,7 +110,7 @@ class TestCParser(tm.TestCase):
         result = reader.read()
 
         expected = ['a', 'hello\nthere', 'this']
-        self.assert_(np.array_equal(result[0], expected))
+        self.assert_numpy_array_equal(result[0], expected)
 
     def test_euro_decimal(self):
         data = '12345,67\n345,678'
@@ -190,7 +190,7 @@ class TestCParser(tm.TestCase):
                             as_recarray=True)
         header = reader.header
         expected = [['a', 'b', 'c']]
-        self.assertEquals(header, expected)
+        self.assertEqual(header, expected)
 
         recs = reader.read()
         expected = {'a': [1, 4], 'b': [2, 5], 'c': [3, 6]}
@@ -233,25 +233,25 @@ aaaaa,5"""
         reader = _make_reader(dtype='S5,i4')
         result = reader.read()
 
-        self.assert_(result[0].dtype == 'S5')
+        self.assertEqual(result[0].dtype, 'S5')
 
         ex_values = np.array(['a', 'aa', 'aaa', 'aaaa', 'aaaaa'], dtype='S5')
-        self.assert_((result[0] == ex_values).all())
-        self.assert_(result[1].dtype == 'i4')
+        self.assertTrue((result[0] == ex_values).all())
+        self.assertEqual(result[1].dtype, 'i4')
 
         reader = _make_reader(dtype='S4')
         result = reader.read()
-        self.assert_(result[0].dtype == 'S4')
+        self.assertEqual(result[0].dtype, 'S4')
         ex_values = np.array(['a', 'aa', 'aaa', 'aaaa', 'aaaa'], dtype='S4')
-        self.assert_((result[0] == ex_values).all())
-        self.assert_(result[1].dtype == 'S4')
+        self.assertTrue((result[0] == ex_values).all())
+        self.assertEqual(result[1].dtype, 'S4')
 
         reader = _make_reader(dtype='S4', as_recarray=True)
         result = reader.read()
-        self.assert_(result['0'].dtype == 'S4')
+        self.assertEqual(result['0'].dtype, 'S4')
         ex_values = np.array(['a', 'aa', 'aaa', 'aaaa', 'aaaa'], dtype='S4')
-        self.assert_((result['0'] == ex_values).all())
-        self.assert_(result['1'].dtype == 'S4')
+        self.assertTrue((result['0'] == ex_values).all())
+        self.assertEqual(result['1'].dtype, 'S4')
 
     def test_pass_dtype(self):
         data = """\
@@ -266,19 +266,19 @@ one,two
 
         reader = _make_reader(dtype={'one': 'u1', 1: 'S1'})
         result = reader.read()
-        self.assert_(result[0].dtype == 'u1')
-        self.assert_(result[1].dtype == 'S1')
+        self.assertEqual(result[0].dtype, 'u1')
+        self.assertEqual(result[1].dtype, 'S1')
 
         reader = _make_reader(dtype={'one': np.uint8, 1: object})
         result = reader.read()
-        self.assert_(result[0].dtype == 'u1')
-        self.assert_(result[1].dtype == 'O')
+        self.assertEqual(result[0].dtype, 'u1')
+        self.assertEqual(result[1].dtype, 'O')
 
         reader = _make_reader(dtype={'one': np.dtype('u1'),
                                      1: np.dtype('O')})
         result = reader.read()
-        self.assert_(result[0].dtype == 'u1')
-        self.assert_(result[1].dtype == 'O')
+        self.assertEqual(result[0].dtype, 'u1')
+        self.assertEqual(result[1].dtype, 'O')
 
     def test_usecols(self):
         data = """\
@@ -295,7 +295,7 @@ a,b,c
         result = reader.read()
 
         exp = _make_reader().read()
-        self.assertEquals(len(result), 2)
+        self.assertEqual(len(result), 2)
         self.assertTrue((result[1] == exp[1]).all())
         self.assertTrue((result[2] == exp[2]).all())
 
@@ -321,6 +321,9 @@ a,b,c
         _test(sample, delimiter=',')
 
         data = 'A  B  C\r  2  3\r4  5  6'
+        _test(data, delim_whitespace=True)
+
+        data = 'A B C\r2 3\r4 5 6'
         _test(data, delim_whitespace=True)
 
     def test_empty_field_eof(self):

@@ -7,7 +7,7 @@
 
    import os
    import csv
-   from StringIO import StringIO
+   from pandas.compat import StringIO, BytesIO
    import pandas as pd
    ExcelWriter = pd.ExcelWriter
 
@@ -29,7 +29,7 @@
 IO Tools (Text, CSV, HDF5, ...)
 *******************************
 
-The Pandas I/O api is a set of top level ``reader`` functions accessed like ``pd.read_csv()`` that generally return a ``pandas``
+The pandas I/O api is a set of top level ``reader`` functions accessed like ``pd.read_csv()`` that generally return a ``pandas``
 object.
 
     * :ref:`read_csv<io.read_csv_table>`
@@ -58,6 +58,13 @@ The corresponding ``writer`` functions are object methods that are accessed like
     * :ref:`to_clipboard<io.clipboard>`
     * :ref:`to_pickle<io.pickle>`
 
+:ref:`Here <io.perf>` is an informal performance comparison for some of these IO methods.
+
+.. note::
+   For examples that use the ``StringIO`` class, make sure you import it
+   according to your Python version, i.e. ``from StringIO import StringIO`` for
+   Python 2 and ``from io import StringIO`` for Python 3.
+
 .. _io.read_csv_table:
 
 CSV & Text files
@@ -85,7 +92,8 @@ They can take a number of arguments:
   - ``dialect``: string or :class:`python:csv.Dialect` instance to expose more
     ways to specify the file format
   - ``dtype``: A data type name or a dict of column name to data type. If not
-    specified, data types will be inferred.
+    specified, data types will be inferred. (Unsupported with
+    ``engine='python'``)
   - ``header``: row number(s) to use as the column names, and the start of the
     data.  Defaults to 0 if no ``names`` passed, otherwise ``None``. Explicitly
     pass ``header=0`` to be able to replace existing names. The header can be
@@ -147,6 +155,7 @@ They can take a number of arguments:
     pieces. Will cause an ``TextFileReader`` object to be returned. More on this
     below in the section on :ref:`iterating and chunking <io.chunking>`
   - ``skip_footer``: number of lines to skip at bottom of file (default 0)
+    (Unsupported with ``engine='c'``)
   - ``converters``: a dictionary of functions for converting values in certain
     columns, where keys are either integers or column labels
   - ``encoding``: a string representing the encoding to use for decoding
@@ -268,6 +277,11 @@ individual columns:
     df = pd.read_csv(StringIO(data), dtype={'b': object, 'c': np.float64})
     df.dtypes
 
+.. note::
+    The ``dtype`` option is currently only supported by the C engine.
+    Specifying ``dtype`` with ``engine`` other than 'c' raises a
+    ``ValueError``.
+
 .. _io.headers:
 
 Handling column names
@@ -278,7 +292,6 @@ used as the column names:
 
 .. ipython:: python
 
-    from StringIO import StringIO
     data = 'a,b,c\n1,2,3\n4,5,6\n7,8,9'
     print(data)
     pd.read_csv(StringIO(data))
@@ -326,8 +339,8 @@ result in byte strings being decoded to unicode in the result:
 
 .. ipython:: python
 
-   data = 'word,length\nTr\xe4umen,7\nGr\xfc\xdfe,5'
-   df = pd.read_csv(StringIO(data), encoding='latin-1')
+   data = b'word,length\nTr\xc3\xa4umen,7\nGr\xc3\xbc\xc3\x9fe,5'.decode('utf8').encode('latin-1')
+   df = pd.read_csv(BytesIO(data), encoding='latin-1')
    df
    df['word'][1]
 
@@ -386,11 +399,6 @@ The simplest case is to just pass in ``parse_dates=True``:
 
    # These are python datetime objects
    df.index
-
-.. ipython:: python
-   :suppress:
-
-   os.remove('foo.csv')
 
 It is often the case that we may want to store date and time data separately,
 or store various date fields separately. the ``parse_dates`` keyword can be
@@ -456,12 +464,22 @@ data columns:
                     index_col=0) #index is the nominal column
    df
 
-**Note**: When passing a dict as the `parse_dates` argument, the order of
-the columns prepended is not guaranteed, because `dict` objects do not impose
-an ordering on their keys. On Python 2.7+ you may use `collections.OrderedDict`
-instead of a regular `dict` if this matters to you. Because of this, when using a
-dict for 'parse_dates' in conjunction with the `index_col` argument, it's best to
-specify `index_col` as a column label rather then as an index on the resulting frame.
+.. note::
+   read_csv has a fast_path for parsing datetime strings in iso8601 format,
+   e.g "2000-01-01T00:01:02+00:00" and similar variations. If you can arrange
+   for your data to store datetimes in this format, load times will be
+   significantly faster, ~20x has been observed.
+
+
+.. note::
+
+   When passing a dict as the `parse_dates` argument, the order of
+   the columns prepended is not guaranteed, because `dict` objects do not impose
+   an ordering on their keys. On Python 2.7+ you may use `collections.OrderedDict`
+   instead of a regular `dict` if this matters to you. Because of this, when using a
+   dict for 'parse_dates' in conjunction with the `index_col` argument, it's best to
+   specify `index_col` as a column label rather then as an index on the resulting frame.
+
 
 Date Parsing Functions
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -489,6 +507,45 @@ a single date rather than the entire array.
    os.remove('tmp.csv')
 
 .. _io.dayfirst:
+
+
+Inferring Datetime Format
+~~~~~~~~~~~~~~~~~~~~~~~~~
+If you have ``parse_dates`` enabled for some or all of your columns, and your
+datetime strings are all formatted the same way, you may get a large speed
+up by setting ``infer_datetime_format=True``.  If set, pandas will attempt
+to guess the format of your datetime strings, and then use a faster means
+of parsing the strings.  5-10x parsing speeds have been observed.  pandas
+will fallback to the usual parsing if either the format cannot be guessed
+or the format that was guessed cannot properly parse the entire column
+of strings.  So in general, ``infer_datetime_format`` should not have any
+negative consequences if enabled.
+
+Here are some examples of datetime strings that can be guessed (All
+representing December 30th, 2011 at 00:00:00)
+
+- "20111230"
+- "2011/12/30"
+- "20111230 00:00:00"
+- "12/30/2011 00:00:00"
+- "30/Dec/2011 00:00:00"
+- "30/December/2011 00:00:00"
+
+``infer_datetime_format`` is sensitive to ``dayfirst``.  With
+``dayfirst=True``, it will guess "01/12/2011" to be December 1st. With
+``dayfirst=False`` (default) it will guess "01/12/2011" to be January 12th.
+
+.. ipython:: python
+
+   # Try to infer the format for the index column
+   df = pd.read_csv('foo.csv', index_col=0, parse_dates=True,
+                    infer_datetime_format=True)
+   df
+
+.. ipython:: python
+   :suppress:
+
+   os.remove('foo.csv')
 
 International Date Formats
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -565,7 +622,7 @@ the corresponding equivalent values will also imply a missing value (in this cas
 
 To completely override the default values that are recognized as missing, specify ``keep_default_na=False``.
 The default ``NaN`` recognized values are ``['-1.#IND', '1.#QNAN', '1.#IND', '-1.#QNAN', '#N/A','N/A', 'NA',
-'#NA', 'NULL', 'NaN', 'nan']``.
+'#NA', 'NULL', 'NaN', '-NaN', 'nan', '-nan']``.
 
 .. code-block:: python
 
@@ -979,6 +1036,22 @@ Specifying ``iterator=True`` will also return the ``TextFileReader`` object:
    os.remove('tmp.sv')
    os.remove('tmp2.sv')
 
+Specifying the parser engine
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Under the hood pandas uses a fast and efficient parser implemented in C as well
+as a python implementation which is currently more feature-complete. Where
+possible pandas uses the C parser (specified as ``engine='c'``), but may fall
+back to python if C-unsupported options are specified. Currently, C-unsupported
+options include:
+
+- ``sep`` other than a single character (e.g. regex separators)
+- ``skip_footer``
+- ``sep=None`` with ``delim_whitespace=False``
+
+Specifying any of the above options will produce a ``ParserWarning`` unless the
+python engine is selected explicitly using ``engine='python'``.
+
 .. _io.store_in_csv:
 
 Writing to CSV format
@@ -988,8 +1061,10 @@ The Series and DataFrame objects have an instance method ``to_csv`` which
 allows storing the contents of the object as a comma-separated-values file. The
 function takes a number of arguments. Only the first is required.
 
-  - ``path``: A string path to the file to write
+  - ``path_or_buf``: A string path to the file to write or a StringIO
+  - ``sep`` : Field delimiter for the output file (default ",")
   - ``na_rep``: A string representation of a missing value (default '')
+  - ``float_format``: Format string for floating point numbers
   - ``cols``: Columns to write (default None)
   - ``header``: Whether to write out the column names (default True)
   - ``index``: whether to write row (index) names (default True)
@@ -997,11 +1072,18 @@ function takes a number of arguments. Only the first is required.
     (default), and `header` and `index` are True, then the index names are
     used. (A sequence should be given if the DataFrame uses MultiIndex).
   - ``mode`` : Python write mode, default 'w'
-  - ``sep`` : Field delimiter for the output file (default ",")
   - ``encoding``: a string representing the encoding to use if the contents are
     non-ascii, for python versions prior to 3
-  - ``tupleize_cols``: boolean, default False, if False, write as a list of tuples,
-    otherwise write in an expanded line format suitable for ``read_csv``
+  - ``line_terminator``: Character sequence denoting line end (default '\\n')
+  - ``quoting``: Set quoting rules as in csv module (default csv.QUOTE_MINIMAL)
+  - ``quotechar``: Character used to quote fields (default '"')
+  - ``doublequote``: Control quoting of ``quotechar`` in fields (default True)
+  - ``escapechar``: Character used to escape ``sep`` and ``quotechar`` when
+    appropriate (default None)
+  - ``chunksize``: Number of rows to write at a time
+  - ``tupleize_cols``: If False (default), write as a list of tuples, otherwise
+    write in an expanded line format suitable for ``read_csv``
+  - ``date_format``: Format string for datetime objects
 
 Writing a formatted string
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1356,7 +1438,7 @@ Dates written in nanoseconds need to be read back in nanoseconds:
    dfju = pd.read_json(json, date_unit='ms')
    dfju
 
-   # Let Pandas detect the correct precision
+   # Let pandas detect the correct precision
    dfju = pd.read_json(json)
    dfju
 
@@ -1436,7 +1518,7 @@ Normalization
 
 .. versionadded:: 0.13.0
 
-Pandas provides a utility function to take a dict or list of dicts and *normalize* this semi-structured data
+pandas provides a utility function to take a dict or list of dicts and *normalize* this semi-structured data
 into a flat table.
 
 .. ipython:: python
@@ -1516,8 +1598,6 @@ as a string
 You can even pass in an instance of ``StringIO`` if you so desire
 
 .. ipython:: python
-
-   from cStringIO import StringIO
 
    with open(file_path, 'r') as f:
        sio = StringIO(f.read())
@@ -1758,36 +1838,43 @@ Not escaped:
 Excel files
 -----------
 
-The ``read_excel`` method can read Excel 2003 (``.xls``) and
+The :func:`~pandas.read_excel` method can read Excel 2003 (``.xls``) and
 Excel 2007 (``.xlsx``) files using the ``xlrd`` Python
 module and use the same parsing code as the above to convert tabular data into
 a DataFrame. See the :ref:`cookbook<cookbook.excel>` for some
 advanced strategies
 
+Besides ``read_excel`` you can also read Excel files using the ``ExcelFile``
+class. The following two commands are equivalent:
+
+.. code-block:: python
+
+    # using the ExcelFile class
+    xls = pd.ExcelFile('path_to_file.xls')
+    xls.parse('Sheet1', index_col=None, na_values=['NA'])
+
+    # using the read_excel function
+    read_excel('path_to_file.xls', 'Sheet1', index_col=None, na_values=['NA'])
+
+The class based approach can be used to read multiple sheets or to introspect
+the sheet names using the ``sheet_names`` attribute.
+
 .. note::
 
-   The prior method of accessing Excel is now deprecated as of 0.12.0,
-   this will work but will be removed in a future version.
-
-      .. code-block:: python
-
-         from pandas.io.parsers import ExcelFile
-         xls = ExcelFile('path_to_file.xls')
-         xls.parse('Sheet1', index_col=None, na_values=['NA'])
-
-   Replaced by
-
-     .. code-block:: python
-
-        read_excel('path_to_file.xls', 'Sheet1', index_col=None, na_values=['NA'])
+   The prior method of accessing ``ExcelFile`` has been moved from
+   ``pandas.io.parsers`` to the top level namespace starting from pandas
+   0.12.0.
 
 .. versionadded:: 0.13
 
 There are now two ways to read in sheets from an Excel file. You can provide
-either the index of a sheet or its name. If the value provided is an integer
-then it is assumed that the integer refers to the index of a sheet, otherwise
-if a string is passed then it is assumed that the string refers to the name of
-a particular sheet in the file.
+either the index of a sheet or its name to by passing different values for
+``sheet_name``.
+
+- Pass a string to refer to the name of a particular sheet in the workbook.
+- Pass an integer to refer to the index of a sheet. Indices follow Python
+  convention, beginning at 0.
+- The default value is ``sheet_name=0``. This reads the first sheet.
 
 Using the sheet name:
 
@@ -1801,6 +1888,12 @@ Using the sheet index:
 
    read_excel('path_to_file.xls', 0, index_col=None, na_values=['NA'])
 
+Using all default values:
+
+.. code-block:: python
+
+   read_excel('path_to_file.xls')
+
 It is often the case that users will insert columns to do temporary computations
 in Excel and you may not want to read in those columns. `read_excel` takes
 a `parse_cols` keyword to allow you to specify a subset of columns to parse.
@@ -1810,14 +1903,14 @@ to be parsed.
 
 .. code-block:: python
 
-   read_excel('path_to_file.xls', 'Sheet1', parse_cols=2, index_col=None, na_values=['NA'])
+   read_excel('path_to_file.xls', 'Sheet1', parse_cols=2)
 
 If `parse_cols` is a list of integers, then it is assumed to be the file column
 indices to be parsed.
 
 .. code-block:: python
 
-   read_excel('path_to_file.xls', 'Sheet1', parse_cols=[0, 2, 3], index_col=None, na_values=['NA'])
+   read_excel('path_to_file.xls', 'Sheet1', parse_cols=[0, 2, 3])
 
 To write a DataFrame object to a sheet of an Excel file, you can use the
 ``to_excel`` instance method.  The arguments are largely the same as ``to_csv``
@@ -1832,6 +1925,15 @@ written.  For example:
 Files with a ``.xls`` extension will be written using ``xlwt`` and those with a
 ``.xlsx`` extension will be written using ``xlsxwriter`` (if available) or
 ``openpyxl``.
+
+The DataFrame will be written in a way that tries to mimic the REPL output. One
+difference from 0.12.0 is that the ``index_label`` will be placed in the second
+row instead of the first. You can get the previous behaviour by setting the
+``merge_cells`` option in ``to_excel()`` to ``False``:
+
+.. code-block:: python
+
+   df.to_excel('path_to_file.xlsx', index_label='label', merge_cells=False)
 
 The Panel class also has a ``to_excel`` instance method,
 which writes each DataFrame in the Panel to a separate sheet.
@@ -2072,7 +2174,7 @@ for some advanced strategies
 .. note::
 
    ``PyTables`` 3.0.0 was recently released to enable support for Python 3.
-   Pandas should be fully compatible (and previously written stores should be
+   pandas should be fully compatible (and previously written stores should be
    backwards compatible) with all ``PyTables`` >= 2.3. For ``python >= 3.2``,
    ``pandas >= 0.12.0`` is required for compatibility.
 
@@ -2209,6 +2311,8 @@ with rows and columns. A ``table`` may be appended to in the same or
 other sessions.  In addition, delete & query type operations are
 supported. This format is specified by ``format='table'`` or ``format='t'``
 to ``append`` or ``put`` or ``to_hdf``
+
+.. versionadded:: 0.13
 
 This format can be set as an option as well ``pd.set_option('io.hdf.default_format','table')`` to
 enable ``put/append/to_hdf`` to by default store in the ``table`` format.
@@ -2393,6 +2497,37 @@ The right-hand side of the sub-expression (after a comparsion operator) can be:
    - lists, e.g. ``"['A','B']"``
    - variables that are defined in the local names space, e.g. ``date``
 
+.. note::
+
+   Passing a string to a query by interpolating it into the query
+   expression is not recommended. Simply assign the string of interest to a
+   variable and use that variable in an expression. For example, do this
+
+   .. code-block:: python
+
+      string = "HolyMoly'"
+      store.select('df', 'index == string')
+
+   instead of this
+
+   .. code-block:: python
+
+      string = "HolyMoly'"
+      store.select('df',  'index == %s' % string)
+
+    The latter will **not** work and will raise a ``SyntaxError``.Note that
+    there's a single quote followed by a double quote in the ``string``
+    variable.
+
+    If you *must* interpolate, use the ``'%r'`` format specifier
+
+    .. code-block:: python
+
+       store.select('df', 'index == %r' % string)
+
+    which will quote ``string``.
+
+
 Here are some examples:
 
 .. ipython:: python
@@ -2564,10 +2699,27 @@ The default is 50,000 rows returned in a chunk.
       for df in read_hdf('store.h5','df', chunsize=3):
           print(df)
 
-Note, that the chunksize keyword applies to the **returned** rows. So if you
-are doing a query, then that set will be subdivided and returned in the
-iterator. Keep in mind that if you do not pass a ``where`` selection criteria
-then the ``nrows`` of the table are considered.
+Note, that the chunksize keyword applies to the **source** rows. So if you
+are doing a query, then the chunksize will subdivide the total rows in the table
+and the query applied, returning an iterator on potentially unequal sized chunks.
+
+Here is a recipe for generating a query and using it to create equal sized return
+chunks.
+
+.. ipython:: python
+
+   dfeq = DataFrame({'number': np.arange(1,11)})
+   dfeq
+
+   store.append('dfeq', dfeq, data_columns=['number'])
+
+   def chunks(l, n):
+        return [l[i:i+n] for i in range(0, len(l), n)]
+
+   evens = [2,4,6,8,10]
+   coordinates = store.select_as_coordinates('dfeq','number=evens')
+   for c in chunks(coordinates, 2):
+        print store.select('dfeq',where=c)
 
 Advanced Queries
 ~~~~~~~~~~~~~~~~
@@ -2723,7 +2875,7 @@ again **WILL TEND TO INCREASE THE FILE SIZE**. To *clean* the file, use
 Compression
 ~~~~~~~~~~~
 
-``PyTables`` allows the stored data to be compressed. Tthis applies to
+``PyTables`` allows the stored data to be compressed. This applies to
 all kinds of stores, not just tables.
 
    - Pass ``complevel=int`` for a compression level (1-9, with 0 being no
@@ -3001,14 +3153,58 @@ SQL Queries
 -----------
 
 The :mod:`pandas.io.sql` module provides a collection of query wrappers to both
-facilitate data retrieval and to reduce dependency on DB-specific API. These
-wrappers only support the Python database adapters which respect the `Python
-DB-API <http://www.python.org/dev/peps/pep-0249/>`__. See some
-:ref:`cookbook examples <cookbook.sql>` for some advanced strategies
+facilitate data retrieval and to reduce dependency on DB-specific API. Database abstraction
+is provided by SQLAlchemy if installed, in addition you will need a driver library for
+your database.
 
-For example, suppose you want to query some data with different types from a
-table such as:
+.. versionadded:: 0.14.0
 
+If SQLAlchemy is not installed, a fallback is only provided for sqlite (and
+for mysql for backwards compatibility, but this is deprecated and will be
+removed in a future version).
+This mode requires a Python database adapter which respect the `Python
+DB-API <http://www.python.org/dev/peps/pep-0249/>`__.
+
+See also some :ref:`cookbook examples <cookbook.sql>` for some advanced strategies.
+
+The key functions are:
+
+.. autosummary::
+    :toctree: generated/
+
+    read_sql_table
+    read_sql_query
+    read_sql
+    DataFrame.to_sql
+
+.. note::
+
+    The function :func:`~pandas.read_sql` is a convenience wrapper around
+    :func:`~pandas.read_sql_table` and :func:`~pandas.read_sql_query` (and for
+    backward compatibility) and will delegate to specific function depending on
+    the provided input (database table name or sql query).
+
+In the following example, we use the `SQlite <http://www.sqlite.org/>`__ SQL database
+engine. You can use a temporary SQLite database where data are stored in
+"memory".
+
+To connect with SQLAlchemy you use the :func:`create_engine` function to create an engine
+object from database URI. You only need to create the engine once per database you are
+connecting to.
+For more information on :func:`create_engine` and the URI formatting, see the examples
+below and the SQLAlchemy `documentation <http://docs.sqlalchemy.org/en/rel_0_9/core/engines.html>`__
+
+.. ipython:: python
+
+   from sqlalchemy import create_engine
+   # Create your connection.
+   engine = create_engine('sqlite:///:memory:')
+
+Writing DataFrames
+~~~~~~~~~~~~~~~~~~
+
+Assuming the following data is in a DataFrame ``data``, we can insert it into
+the database using :func:`~pandas.DataFrame.to_sql`.
 
 +-----+------------+-------+-------+-------+
 | id  |    Date    | Col_1 | Col_2 | Col_3 |
@@ -3021,81 +3217,151 @@ table such as:
 +-----+------------+-------+-------+-------+
 
 
-Functions from :mod:`pandas.io.sql` can extract some data into a DataFrame. In
-the following example, we use the `SQlite <http://www.sqlite.org/>`__ SQL database
-engine. You can use a temporary SQLite database where data are stored in
-"memory". Just do:
+.. ipython:: python
+   :suppress:
+
+   import datetime
+   c = ['id', 'Date', 'Col_1', 'Col_2', 'Col_3']
+   d = [(26, datetime.datetime(2010,10,18), 'X', 27.5, True),
+   (42, datetime.datetime(2010,10,19), 'Y', -12.5, False),
+   (63, datetime.datetime(2010,10,20), 'Z', 5.73, True)]
+
+   data  = DataFrame(d, columns=c)
+
+.. ipython:: python
+
+    data.to_sql('data', engine)
+
+.. note::
+
+    Due to the limited support for timedelta's in the different database
+    flavors, columns with type ``timedelta64`` will be written as integer
+    values as nanoseconds to the database and a warning will be raised.
+
+
+Reading Tables
+~~~~~~~~~~~~~~
+
+:func:`~pandas.read_sql_table` will read a database table given the
+table name and optionally a subset of columns to read.
+
+.. note::
+
+    In order to use :func:`~pandas.read_sql_table`, you **must** have the
+    SQLAlchemy optional dependency installed.
+
+.. ipython:: python
+
+   pd.read_sql_table('data', engine)
+
+You can also specify the name of the column as the DataFrame index,
+and specify a subset of columns to be read.
+
+.. ipython:: python
+
+   pd.read_sql_table('data', engine, index_col='id')
+   pd.read_sql_table('data', engine, columns=['Col_1', 'Col_2'])
+
+And you can explicitly force columns to be parsed as dates:
+
+.. ipython:: python
+
+   pd.read_sql_table('data', engine, parse_dates=['Date'])
+
+If needed you can explicitly specifiy a format string, or a dict of arguments
+to pass to :func:`pandas.to_datetime`:
 
 .. code-block:: python
 
-   import sqlite3
-   from pandas.io import sql
-   # Create your connection.
-   cnx = sqlite3.connect(':memory:')
-
-.. ipython:: python
-   :suppress:
-
-   import sqlite3
-   from pandas.io import sql
-   cnx = sqlite3.connect(':memory:')
-
-.. ipython:: python
-   :suppress:
-
-   cu = cnx.cursor()
-   # Create a table named 'data'.
-   cu.execute("""CREATE TABLE data(id integer,
-                                   date date,
-                                   Col_1 string,
-                                   Col_2 float,
-                                   Col_3 bool);""")
-   cu.executemany('INSERT INTO data VALUES (?,?,?,?,?)',
-                  [(26, datetime.datetime(2010,10,18), 'X', 27.5, True),
-                   (42, datetime.datetime(2010,10,19), 'Y', -12.5, False),
-                   (63, datetime.datetime(2010,10,20), 'Z', 5.73, True)])
+   pd.read_sql_table('data', engine, parse_dates={'Date': '%Y-%m-%d'})
+   pd.read_sql_table('data', engine, parse_dates={'Date': {'format': '%Y-%m-%d %H:%M:%S'}})
 
 
-Let ``data`` be the name of your SQL table. With a query and your database
-connection, just use the :func:`~pandas.io.sql.read_frame` function to get the
-query results into a DataFrame:
+You can check if a table exists using :func:`~pandas.io.sql.has_table`
+
+
+Querying
+~~~~~~~~
+
+You can query using raw SQL in the :func:`~pandas.read_sql_query` function.
+In this case you must use the SQL variant appropriate for your database.
+When using SQLAlchemy, you can also pass SQLAlchemy Expression language constructs,
+which are database-agnostic.
 
 .. ipython:: python
 
-   sql.read_frame("SELECT * FROM data;", cnx)
-
-You can also specify the name of the column as the DataFrame index:
-
-.. ipython:: python
-
-   sql.read_frame("SELECT * FROM data;", cnx, index_col='id')
-   sql.read_frame("SELECT * FROM data;", cnx, index_col='date')
+   pd.read_sql_query('SELECT * FROM data', engine)
 
 Of course, you can specify a more "complex" query.
 
 .. ipython:: python
 
-   sql.read_frame("SELECT id, Col_1, Col_2 FROM data WHERE id = 42;", cnx)
-
-.. ipython:: python
-   :suppress:
-
-   cu.close()
-   cnx.close()
+   pd.read_sql_query("SELECT id, Col_1, Col_2 FROM data WHERE id = 42;", engine)
 
 
-There are a few other available functions:
+You can also run a plain query without creating a dataframe with
+:func:`~pandas.io.sql.execute`. This is useful for queries that don't return values,
+such as INSERT. This is functionally equivalent to calling ``execute`` on the
+SQLAlchemy engine or db connection object. Again, you must use the SQL syntax
+variant appropriate for your database.
 
-  - ``tquery`` returns a list of tuples corresponding to each row.
-  - ``uquery`` does the same thing as tquery, but instead of returning results
-    it returns the number of related rows.
-  - ``write_frame`` writes records stored in a DataFrame into the SQL table.
-  - ``has_table`` checks if a given SQLite table exists.
+.. code-block:: python
 
-.. note::
+   from pandas.io import sql
+   sql.execute('SELECT * FROM table_name', engine)
+   sql.execute('INSERT INTO table_name VALUES(?, ?, ?)', engine, params=[('id', 1, 12.2, True)])
 
-   For now, writing your DataFrame into a database works only with
-   **SQLite**. Moreover, the **index** will currently be **dropped**.
+
+Engine connection examples
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+To connect with SQLAlchemy you use the :func:`create_engine` function to create an engine
+object from database URI. You only need to create the engine once per database you are
+connecting to.
+
+.. code-block:: python
+
+  from sqlalchemy import create_engine
+
+  engine = create_engine('postgresql://scott:tiger@localhost:5432/mydatabase')
+
+  engine = create_engine('mysql+mysqldb://scott:tiger@localhost/foo')
+
+  engine = create_engine('oracle://scott:tiger@127.0.0.1:1521/sidname')
+
+  engine = create_engine('mssql+pyodbc://mydsn')
+
+  # sqlite://<nohostname>/<path>
+  # where <path> is relative:
+  engine = create_engine('sqlite:///foo.db')
+
+  # or absolute, starting with a slash:
+  engine = create_engine('sqlite:////absolute/path/to/foo.db')
+
+For more information see the examples the SQLAlchemy `documentation <http://docs.sqlalchemy.org/en/rel_0_9/core/engines.html>`__
+
+
+Sqlite fallback
+~~~~~~~~~~~~~~~
+
+The use of sqlite is supported without using SQLAlchemy.
+This mode requires a Python database adapter which respect the `Python
+DB-API <http://www.python.org/dev/peps/pep-0249/>`__.
+
+You can create connections like so:
+
+.. code-block:: python
+
+   import sqlite3
+   con = sqlite3.connect(':memory:')
+
+And then issue the following queries:
+
+.. code-block:: python
+
+   data.to_sql('data', cnx)
+   pd.read_sql_query("SELECT * FROM data", con)
+
 
 .. _io.bigquery:
 
@@ -3181,9 +3447,9 @@ To add more rows to this, simply:
    To use this module, you will need a BigQuery account. See
    <https://cloud.google.com/products/big-query> for details.
 
-   As of 10/10/13, there is a bug in Google's API preventing result sets
-   from being larger than 100,000 rows. A patch is scheduled for the week of
-   10/14/13.
+   As of 1/28/14, a known bug is present that could possibly cause data duplication in the resultant dataframe. A fix is imminent,
+   but any client changes will not make it into 0.13.1. See:
+   http://stackoverflow.com/questions/20984592/bigquery-results-not-including-page-token/21009144?noredirect=1#comment32090677_21009144
 
 .. _io.stata:
 
@@ -3236,3 +3502,128 @@ Alternatively, the function :func:`~pandas.io.stata.read_stata` can be used
 
    import os
    os.remove('stata.dta')
+
+.. _io.perf:
+
+Performance Considerations
+--------------------------
+
+This is an informal comparison of various IO methods, using pandas 0.13.1.
+
+.. code-block:: python
+
+   In [3]: df = DataFrame(randn(1000000,2),columns=list('AB'))
+   <class 'pandas.core.frame.DataFrame'>
+   Int64Index: 1000000 entries, 0 to 999999
+   Data columns (total 2 columns):
+   A    1000000  non-null values
+   B    1000000  non-null values
+   dtypes: float64(2)
+
+
+Writing
+
+.. code-block:: python
+
+   In [14]: %timeit test_sql_write(df)
+   1 loops, best of 3: 6.24 s per loop
+
+   In [15]: %timeit test_hdf_fixed_write(df)
+   1 loops, best of 3: 237 ms per loop
+
+   In [26]: %timeit test_hdf_fixed_write_compress(df)
+   1 loops, best of 3: 245 ms per loop
+
+   In [16]: %timeit test_hdf_table_write(df)
+   1 loops, best of 3: 901 ms per loop
+
+   In [27]: %timeit test_hdf_table_write_compress(df)
+   1 loops, best of 3: 952 ms per loop
+
+   In [17]: %timeit test_csv_write(df)
+   1 loops, best of 3: 3.44 s per loop
+
+Reading
+
+.. code-block:: python
+
+   In [18]: %timeit test_sql_read()
+   1 loops, best of 3: 766 ms per loop
+
+   In [19]: %timeit test_hdf_fixed_read()
+   10 loops, best of 3: 19.1 ms per loop
+
+   In [28]: %timeit test_hdf_fixed_read_compress()
+   10 loops, best of 3: 36.3 ms per loop
+
+   In [20]: %timeit test_hdf_table_read()
+   10 loops, best of 3: 39 ms per loop
+
+   In [29]: %timeit test_hdf_table_read_compress()
+   10 loops, best of 3: 60.6 ms per loop
+
+   In [22]: %timeit test_csv_read()
+   1 loops, best of 3: 620 ms per loop
+
+Space on disk (in bytes)
+
+.. code-block:: python
+
+    25843712 Apr  8 14:11 test.sql
+    24007368 Apr  8 14:11 test_fixed.hdf
+    15580682 Apr  8 14:11 test_fixed_compress.hdf
+    24458444 Apr  8 14:11 test_table.hdf
+    16797283 Apr  8 14:11 test_table_compress.hdf
+    46152810 Apr  8 14:11 test.csv
+
+And here's the code
+
+.. code-block:: python
+
+   import sqlite3
+   import os
+   from pandas.io import sql
+
+   df = DataFrame(randn(1000000,2),columns=list('AB'))
+
+   def test_sql_write(df):
+       if os.path.exists('test.sql'):
+           os.remove('test.sql')
+       sql_db = sqlite3.connect('test.sql')
+       sql.write_frame(df, name='test_table', con=sql_db)
+       sql_db.close()
+
+   def test_sql_read():
+       sql_db = sqlite3.connect('test.sql')
+       sql.read_frame("select * from test_table", sql_db)
+       sql_db.close()
+
+   def test_hdf_fixed_write(df):
+       df.to_hdf('test_fixed.hdf','test',mode='w')
+
+   def test_hdf_fixed_read():
+       pd.read_hdf('test_fixed.hdf','test')
+
+   def test_hdf_fixed_write_compress(df):
+       df.to_hdf('test_fixed_compress.hdf','test',mode='w',complib='blosc')
+
+   def test_hdf_fixed_read_compress():
+       pd.read_hdf('test_fixed_compress.hdf','test')
+
+   def test_hdf_table_write(df):
+       df.to_hdf('test_table.hdf','test',mode='w',format='table')
+
+   def test_hdf_table_read():
+       pd.read_hdf('test_table.hdf','test')
+
+   def test_hdf_table_write_compress(df):
+       df.to_hdf('test_table_compress.hdf','test',mode='w',complib='blosc',format='table')
+
+   def test_hdf_table_read_compress():
+       pd.read_hdf('test_table_compress.hdf','test')
+
+   def test_csv_write(df):
+       df.to_csv('test.csv',mode='w')
+
+   def test_csv_read():
+       pd.read_csv('test.csv',index_col=0)

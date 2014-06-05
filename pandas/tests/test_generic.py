@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 import operator
 import nose
-
+import copy
 import numpy as np
 from numpy import nan
 import pandas as pd
@@ -163,7 +163,7 @@ class Generic(object):
 
         def f():
             if obj1:
-                print("this works and shouldn't")
+                com.pprint_thing("this works and shouldn't")
         self.assertRaises(ValueError, f)
         self.assertRaises(ValueError, lambda : obj1 and obj2)
         self.assertRaises(ValueError, lambda : obj1 or obj2)
@@ -227,9 +227,9 @@ class Generic(object):
         for m in x._metadata:
             v = getattr(x,m,None)
             if y is None:
-                self.assert_(v is None)
+                self.assertIsNone(v)
             else:
-                self.assert_(v == getattr(y,m,None))
+                self.assertEqual(v, getattr(y,m,None))
 
     def test_metadata_propagation(self):
         # check that the metadata matches up on the resulting ops
@@ -285,7 +285,6 @@ class Generic(object):
         except (AttributeError):
             pass
 
-
         # ---------------------------
         # non-preserving (by default)
         # ---------------------------
@@ -338,7 +337,7 @@ class Generic(object):
             self._compare(o.tail(), o.iloc[-5:])
 
             # 0-len
-            self._compare(o.head(0), o.iloc[:0])
+            self._compare(o.head(0), o.iloc[:])
             self._compare(o.tail(0), o.iloc[0:])
 
             # bounded
@@ -394,10 +393,10 @@ class TestSeries(tm.TestCase, Generic):
 
         # allow single item via bool method
         s = Series([True])
-        self.assert_(s.bool() is True)
+        self.assertTrue(s.bool())
 
         s = Series([False])
-        self.assert_(s.bool() is False)
+        self.assertFalse(s.bool())
 
         # single item nan to raise
         for s in [ Series([np.nan]), Series([pd.NaT]), Series([True]), Series([False]) ]:
@@ -428,6 +427,45 @@ class TestSeries(tm.TestCase, Generic):
         result = o.T
         self.check_metadata(o,result)
 
+        # resample
+        ts = Series(np.random.rand(1000),
+                    index=date_range('20130101',periods=1000,freq='s'),
+                    name='foo')
+        result = ts.resample('1T')
+        self.check_metadata(ts,result)
+
+        result = ts.resample('1T',how='min')
+        self.check_metadata(ts,result)
+
+        result = ts.resample('1T',how=lambda x: x.sum())
+        self.check_metadata(ts,result)
+
+        _metadata = Series._metadata
+        _finalize = Series.__finalize__
+        Series._metadata = ['name','filename']
+        o.filename = 'foo'
+        o2.filename = 'bar'
+
+        def finalize(self, other, method=None, **kwargs):
+            for name in self._metadata:
+                if method == 'concat' and name == 'filename':
+                    value = '+'.join([ getattr(o,name) for o in other.objs if getattr(o,name,None) ])
+                    object.__setattr__(self, name, value)
+                else:
+                    object.__setattr__(self, name, getattr(other, name, None))
+
+            return self
+
+        Series.__finalize__ = finalize
+
+        result = pd.concat([o, o2])
+        self.assertEqual(result.filename,'foo+bar')
+        self.assertIsNone(result.name)
+
+        # reset
+        Series._metadata = _metadata
+        Series.__finalize__ = _finalize
+
     def test_interpolate(self):
         ts = Series(np.arange(len(self.ts), dtype=float), self.ts.index)
 
@@ -435,7 +473,7 @@ class TestSeries(tm.TestCase, Generic):
         ts_copy[5:10] = np.NaN
 
         linear_interp = ts_copy.interpolate(method='linear')
-        self.assert_(np.array_equal(linear_interp, ts))
+        self.assert_numpy_array_equal(linear_interp, ts)
 
         ord_ts = Series([d.toordinal() for d in self.ts.index],
                         index=self.ts.index).astype(float)
@@ -444,10 +482,25 @@ class TestSeries(tm.TestCase, Generic):
         ord_ts_copy[5:10] = np.NaN
 
         time_interp = ord_ts_copy.interpolate(method='time')
-        self.assert_(np.array_equal(time_interp, ord_ts))
+        self.assert_numpy_array_equal(time_interp, ord_ts)
 
         # try time interpolation on a non-TimeSeries
-        self.assertRaises(ValueError, self.series.interpolate, method='time')
+        # Only raises ValueError if there are NaNs.
+        non_ts = self.series.copy()
+        non_ts[0] = np.NaN
+        self.assertRaises(ValueError, non_ts.interpolate, method='time')
+
+    def test_interp_regression(self):
+        _skip_if_no_scipy()
+        _skip_if_no_pchip()
+
+        ser = Series(np.sort(np.random.uniform(size=100)))
+
+        # interpolate at new_index
+        new_index = ser.index + Index([49.25, 49.5, 49.75, 50.25, 50.5, 50.75])
+        interp_s = ser.reindex(new_index).interpolate(method='pchip')
+        # does not blow up, GH5977
+        interp_s[49:51]
 
     def test_interpolate_corners(self):
         s = Series([np.nan, np.nan])
@@ -473,7 +526,7 @@ class TestSeries(tm.TestCase, Generic):
 
         expected = s.copy()
         bad = isnull(expected.values)
-        good = -bad
+        good = ~bad
         expected = Series(
             np.interp(vals[bad], vals[good], s.values[good]), index=s.index[bad])
 
@@ -488,7 +541,7 @@ class TestSeries(tm.TestCase, Generic):
     def test_nan_interpolate(self):
         s = Series([0, 1, np.nan, 3])
         result = s.interpolate()
-        expected = Series([0, 1, 2, 3])
+        expected = Series([0., 1., 2., 3.])
         assert_series_equal(result, expected)
 
         _skip_if_no_scipy()
@@ -498,20 +551,20 @@ class TestSeries(tm.TestCase, Generic):
     def test_nan_irregular_index(self):
         s = Series([1, 2, np.nan, 4], index=[1, 3, 5, 9])
         result = s.interpolate()
-        expected = Series([1, 2, 3, 4], index=[1, 3, 5, 9])
+        expected = Series([1., 2., 3., 4.], index=[1, 3, 5, 9])
         assert_series_equal(result, expected)
 
     def test_nan_str_index(self):
         s = Series([0, 1, 2, np.nan], index=list('abcd'))
         result = s.interpolate()
-        expected = Series([0, 1, 2, 2], index=list('abcd'))
+        expected = Series([0., 1., 2., 2.], index=list('abcd'))
         assert_series_equal(result, expected)
 
     def test_interp_quad(self):
         _skip_if_no_scipy()
         sq = Series([1, 4, np.nan, 16], index=[1, 2, 3, 4])
         result = sq.interpolate(method='quadratic')
-        expected = Series([1, 4, 9, 16], index=[1, 2, 3, 4])
+        expected = Series([1., 4., 9., 16.], index=[1, 2, 3, 4])
         assert_series_equal(result, expected)
 
     def test_interp_scipy_basic(self):
@@ -521,17 +574,29 @@ class TestSeries(tm.TestCase, Generic):
         expected = Series([1., 3., 7.5, 12., 18.5, 25.])
         result = s.interpolate(method='slinear')
         assert_series_equal(result, expected)
+
+        result = s.interpolate(method='slinear', donwcast='infer')
+        assert_series_equal(result, expected)
         # nearest
         expected = Series([1, 3, 3, 12, 12, 25])
         result = s.interpolate(method='nearest')
+        assert_series_equal(result, expected.astype('float'))
+
+        result = s.interpolate(method='nearest', downcast='infer')
         assert_series_equal(result, expected)
         # zero
         expected = Series([1, 3, 3, 12, 12, 25])
         result = s.interpolate(method='zero')
+        assert_series_equal(result, expected.astype('float'))
+
+        result = s.interpolate(method='zero', downcast='infer')
         assert_series_equal(result, expected)
         # quadratic
         expected = Series([1, 3., 6.769231, 12., 18.230769, 25.])
         result = s.interpolate(method='quadratic')
+        assert_series_equal(result, expected)
+
+        result = s.interpolate(method='quadratic', downcast='infer')
         assert_series_equal(result, expected)
         # cubic
         expected = Series([1., 3., 6.8, 12., 18.2, 25.])
@@ -561,7 +626,6 @@ class TestSeries(tm.TestCase, Generic):
 
         expected = s.copy()
         expected.loc[2] = 2
-        expected = expected.astype(np.int64)
         result = s.interpolate()
         assert_series_equal(result, expected)
 
@@ -571,9 +635,69 @@ class TestSeries(tm.TestCase, Generic):
 
     def test_interp_nonmono_raise(self):
         _skip_if_no_scipy()
-        s = pd.Series([1, 2, 3], index=[0, 2, 1])
+        s = Series([1, np.nan, 3], index=[0, 2, 1])
         with tm.assertRaises(ValueError):
             s.interpolate(method='krogh')
+
+    def test_interp_datetime64(self):
+        _skip_if_no_scipy()
+        df = Series([1, np.nan, 3], index=date_range('1/1/2000', periods=3))
+        result = df.interpolate(method='nearest')
+        expected = Series([1., 1., 3.], index=date_range('1/1/2000', periods=3))
+        assert_series_equal(result, expected)
+
+    def test_describe(self):
+        _ = self.series.describe()
+        _ = self.ts.describe()
+
+    def test_describe_percentiles(self):
+        with tm.assert_produces_warning(FutureWarning):
+            desc = self.series.describe(percentile_width=50)
+        assert '75%' in desc.index
+        assert '25%' in desc.index
+
+        with tm.assert_produces_warning(FutureWarning):
+            desc = self.series.describe(percentile_width=95)
+        assert '97.5%' in desc.index
+        assert '2.5%' in desc.index
+
+    def test_describe_objects(self):
+        s = Series(['a', 'b', 'b', np.nan, np.nan, np.nan, 'c', 'd', 'a', 'a'])
+        result = s.describe()
+        expected = Series({'count': 7, 'unique': 4,
+                           'top': 'a', 'freq': 3}, index=result.index)
+        assert_series_equal(result, expected)
+
+        dt = list(self.ts.index)
+        dt.append(dt[0])
+        ser = Series(dt)
+        rs = ser.describe()
+        min_date = min(dt)
+        max_date = max(dt)
+        xp = Series({'count': len(dt),
+                     'unique': len(self.ts.index),
+                     'first': min_date, 'last': max_date, 'freq': 2,
+                     'top': min_date}, index=rs.index)
+        assert_series_equal(rs, xp)
+
+    def test_describe_empty(self):
+        result = pd.Series().describe()
+
+        self.assertEqual(result['count'], 0)
+        self.assertTrue(result.drop('count').isnull().all())
+
+        nanSeries = Series([np.nan])
+        nanSeries.name = 'NaN'
+        result = nanSeries.describe()
+        self.assertEqual(result['count'], 0)
+        self.assertTrue(result.drop('count').isnull().all())
+
+    def test_describe_none(self):
+        noneSeries = Series([None])
+        noneSeries.name = 'None'
+        assert_series_equal(noneSeries.describe(),
+                            Series([0, 0], index=['count', 'unique']))
+
 
 class TestDataFrame(tm.TestCase, Generic):
     _typ = DataFrame
@@ -588,10 +712,10 @@ class TestDataFrame(tm.TestCase, Generic):
 
         # allow single item via bool method
         df = DataFrame([[True]])
-        self.assert_(df.bool() is True)
+        self.assertTrue(df.bool())
 
         df = DataFrame([[False]])
-        self.assert_(df.bool() is False)
+        self.assertFalse(df.bool())
 
         df = DataFrame([[False, False]])
         self.assertRaises(ValueError, lambda : df.bool())
@@ -608,7 +732,7 @@ class TestDataFrame(tm.TestCase, Generic):
     def test_interp_basic(self):
         df = DataFrame({'A': [1, 2, np.nan, 4], 'B': [1, 4, 9, np.nan],
                         'C': [1, 2, 3, 5], 'D': list('abcd')})
-        expected = DataFrame({'A': [1, 2, 3, 4], 'B': [1, 4, 9, 9],
+        expected = DataFrame({'A': [1., 2., 3., 4.], 'B': [1., 4., 9., 9.],
                               'C': [1, 2, 3, 5], 'D': list('abcd')})
         result = df.interpolate()
         assert_frame_equal(result, expected)
@@ -617,8 +741,6 @@ class TestDataFrame(tm.TestCase, Generic):
         expected = df.set_index('C')
         expected.A.loc[3] = 3
         expected.B.loc[5] = 9
-        expected[['A', 'B']] = expected[['A', 'B']].astype(np.int64)
-
         assert_frame_equal(result, expected)
 
     def test_interp_bad_method(self):
@@ -632,6 +754,10 @@ class TestDataFrame(tm.TestCase, Generic):
                         'C': [1, 2, 3, 5], 'D': list('abcd')})
 
         result = df['A'].interpolate()
+        expected = Series([1., 2., 3., 4.])
+        assert_series_equal(result, expected)
+
+        result = df['A'].interpolate(downcast='infer')
         expected = Series([1, 2, 3, 4])
         assert_series_equal(result, expected)
 
@@ -691,13 +817,16 @@ class TestDataFrame(tm.TestCase, Generic):
         expected = df.copy()
         expected['A'].iloc[2] = 3
         expected['A'].iloc[5] = 6
+        assert_frame_equal(result, expected)
+
+        result = df.interpolate(method='barycentric', downcast='infer')
         assert_frame_equal(result, expected.astype(np.int64))
 
         result = df.interpolate(method='krogh')
         expectedk = df.copy()
-        expectedk['A'].iloc[2] = 3
-        expectedk['A'].iloc[5] = 6
-        expectedk['A'] = expected['A'].astype(np.int64)
+        # expectedk['A'].iloc[2] = 3
+        # expectedk['A'].iloc[5] = 6
+        expectedk['A'] = expected['A']
         assert_frame_equal(result, expectedk)
 
         _skip_if_no_pchip()
@@ -753,6 +882,145 @@ class TestDataFrame(tm.TestCase, Generic):
         with tm.assertRaises(TypeError):
             df.interpolate(axis=1)
 
+    def test_interp_inplace(self):
+        df = DataFrame({'a': [1., 2., np.nan, 4.]})
+        expected = DataFrame({'a': [1., 2., 3., 4.]})
+        result = df.copy()
+        result['a'].interpolate(inplace=True)
+        assert_frame_equal(result, expected)
+
+        result = df.copy()
+        result['a'].interpolate(inplace=True, downcast='infer')
+        assert_frame_equal(result, expected.astype('int64'))
+
+    def test_interp_ignore_all_good(self):
+        # GH
+        df = DataFrame({'A': [1, 2, np.nan, 4],
+                        'B': [1, 2, 3, 4],
+                        'C': [1., 2., np.nan, 4.],
+                        'D': [1., 2., 3., 4.]})
+        expected = DataFrame({'A': np.array([1, 2, 3, 4], dtype='float64'),
+                              'B': np.array([1, 2, 3, 4], dtype='int64'),
+                              'C': np.array([1., 2., 3, 4.], dtype='float64'),
+                              'D': np.array([1., 2., 3., 4.], dtype='float64')})
+
+        result = df.interpolate(downcast=None)
+        assert_frame_equal(result, expected)
+
+        # all good
+        result = df[['B', 'D']].interpolate(downcast=None)
+        assert_frame_equal(result, df[['B', 'D']])
+
+    def test_describe(self):
+        desc = tm.makeDataFrame().describe()
+        desc = tm.makeMixedDataFrame().describe()
+        desc = tm.makeTimeDataFrame().describe()
+
+    def test_describe_percentiles(self):
+        with tm.assert_produces_warning(FutureWarning):
+            desc = tm.makeDataFrame().describe(percentile_width=50)
+        assert '75%' in desc.index
+        assert '25%' in desc.index
+
+        with tm.assert_produces_warning(FutureWarning):
+            desc = tm.makeDataFrame().describe(percentile_width=95)
+        assert '97.5%' in desc.index
+        assert '2.5%' in desc.index
+
+    def test_describe_quantiles_both(self):
+        with tm.assertRaises(ValueError):
+            tm.makeDataFrame().describe(percentile_width=50,
+                                        percentiles=[25, 75])
+
+    def test_describe_percentiles_percent_or_raw(self):
+        df = tm.makeDataFrame()
+        with tm.assertRaises(ValueError):
+            df.describe(percentiles=[10, 50, 100])
+
+    def test_describe_percentiles_equivalence(self):
+        df = tm.makeDataFrame()
+        d1 = df.describe()
+        d2 = df.describe(percentiles=[.25, .75])
+        assert_frame_equal(d1, d2)
+
+    def test_describe_percentiles_insert_median(self):
+        df = tm.makeDataFrame()
+        d1 = df.describe(percentiles=[.25, .75])
+        d2 = df.describe(percentiles=[.25, .5, .75])
+        assert_frame_equal(d1, d2)
+
+        # none above
+        d1 = df.describe(percentiles=[.25, .45])
+        d2 = df.describe(percentiles=[.25, .45, .5])
+        assert_frame_equal(d1, d2)
+
+        # none below
+        d1 = df.describe(percentiles=[.75, 1])
+        d2 = df.describe(percentiles=[.5, .75, 1])
+        assert_frame_equal(d1, d2)
+
+    def test_describe_no_numeric(self):
+        df = DataFrame({'A': ['foo', 'foo', 'bar'] * 8,
+                        'B': ['a', 'b', 'c', 'd'] * 6})
+        desc = df.describe()
+        expected = DataFrame(dict((k, v.describe())
+                                  for k, v in compat.iteritems(df)),
+                             columns=df.columns)
+        assert_frame_equal(desc, expected)
+
+        ts = tm.makeTimeSeries()
+        df = DataFrame({'time': ts.index})
+        desc = df.describe()
+        self.assertEqual(desc.time['first'], min(ts.index))
+
+    def test_describe_empty_int_columns(self):
+        df = DataFrame([[0, 1], [1, 2]])
+        desc = df[df[0] < 0].describe()  # works
+        assert_series_equal(desc.xs('count'),
+                            Series([0, 0], dtype=float, name='count'))
+        self.assertTrue(isnull(desc.ix[1:]).all().all())
+
+    def test_describe_objects(self):
+        df = DataFrame({"C1": ['a', 'a', 'c'], "C2": ['d', 'd', 'f']})
+        result = df.describe()
+        expected = DataFrame({"C1": [3, 2, 'a', 2], "C2": [3, 2, 'd', 2]},
+                             index=['count', 'unique', 'top', 'freq'])
+        assert_frame_equal(result, expected)
+
+        df = DataFrame({"C1": pd.date_range('2010-01-01', periods=4, freq='D')})
+        df.loc[4] = pd.Timestamp('2010-01-04')
+        result = df.describe()
+        expected = DataFrame({"C1": [5, 4, pd.Timestamp('2010-01-01'),
+                                     pd.Timestamp('2010-01-04'),
+                                     pd.Timestamp('2010-01-04'), 2]},
+                             index=['count', 'unique', 'first', 'last', 'top',
+                                    'freq'])
+        assert_frame_equal(result, expected)
+
+        # mix time and str
+        df['C2'] = ['a', 'a', 'b', 'c', 'a']
+        result = df.describe()
+        # when mix of dateimte / obj the index gets reordered.
+        expected['C2'] = [5, 3, np.nan, np.nan, 'a', 3]
+        assert_frame_equal(result, expected)
+
+        # just str
+        expected = DataFrame({'C2': [5, 3, 'a', 4]},
+                             index=['count', 'unique', 'top', 'freq'])
+        result = df[['C2']].describe()
+
+        # mix of time, str, numeric
+        df['C3'] = [2, 4, 6, 8, 2]
+        result = df.describe()
+        expected = DataFrame({"C3": [5., 4.4, 2.607681, 2., 2., 4., 6., 8.]},
+                             index=['count', 'mean', 'std', 'min', '25%',
+                                    '50%', '75%', 'max'])
+        assert_frame_equal(result, expected)
+        assert_frame_equal(df.describe(), df[['C3']].describe())
+
+        assert_frame_equal(df[['C1', 'C3']].describe(), df[['C3']].describe())
+        assert_frame_equal(df[['C2', 'C3']].describe(), df[['C3']].describe())
+
     def test_no_order(self):
         _skip_if_no_scipy()
         s = Series([0, 1, np.nan, 3])
@@ -765,8 +1033,79 @@ class TestDataFrame(tm.TestCase, Generic):
         _skip_if_no_scipy()
         s = Series([1, 2, np.nan, 4, 5, np.nan, 7])
         result = s.interpolate(method='spline', order=1)
-        expected = Series([1, 2, 3, 4, 5, 6, 7])
+        expected = Series([1., 2., 3., 4., 5., 6., 7.])
         assert_series_equal(result, expected)
+
+    def test_metadata_propagation_indiv(self):
+
+        # groupby
+        df = DataFrame({'A': ['foo', 'bar', 'foo', 'bar',
+                              'foo', 'bar', 'foo', 'foo'],
+                        'B': ['one', 'one', 'two', 'three',
+                              'two', 'two', 'one', 'three'],
+                        'C': np.random.randn(8),
+                        'D': np.random.randn(8)})
+        result = df.groupby('A').sum()
+        self.check_metadata(df,result)
+
+        # resample
+        df = DataFrame(np.random.randn(1000,2),
+                       index=date_range('20130101',periods=1000,freq='s'))
+        result = df.resample('1T')
+        self.check_metadata(df,result)
+
+        # merging with override
+        # GH 6923
+        _metadata = DataFrame._metadata
+        _finalize = DataFrame.__finalize__
+
+        np.random.seed(10)
+        df1 = DataFrame(np.random.randint(0, 4, (3, 2)), columns=['a', 'b'])
+        df2 = DataFrame(np.random.randint(0, 4, (3, 2)), columns=['c', 'd'])
+        DataFrame._metadata = ['filename']
+        df1.filename = 'fname1.csv'
+        df2.filename = 'fname2.csv'
+
+        def finalize(self, other, method=None, **kwargs):
+
+            for name in self._metadata:
+                if method == 'merge':
+                    left, right = other.left, other.right
+                    value = getattr(left, name, '') + '|' + getattr(right, name, '')
+                    object.__setattr__(self, name, value)
+                else:
+                    object.__setattr__(self, name, getattr(other, name, ''))
+
+            return self
+
+        DataFrame.__finalize__ = finalize
+        result = df1.merge(df2, left_on=['a'], right_on=['c'], how='inner')
+        self.assertEqual(result.filename,'fname1.csv|fname2.csv')
+
+        # concat
+        # GH 6927
+        DataFrame._metadata = ['filename']
+        df1 = DataFrame(np.random.randint(0, 4, (3, 2)), columns=list('ab'))
+        df1.filename = 'foo'
+
+        def finalize(self, other, method=None, **kwargs):
+            for name in self._metadata:
+                if method == 'concat':
+                    value = '+'.join([ getattr(o,name) for o in other.objs if getattr(o,name,None) ])
+                    object.__setattr__(self, name, value)
+                else:
+                    object.__setattr__(self, name, getattr(other, name, None))
+
+            return self
+
+        DataFrame.__finalize__ = finalize
+
+        result = pd.concat([df1, df1])
+        self.assertEqual(result.filename,'foo+foo')
+
+        # reset
+        DataFrame._metadata = _metadata
+        DataFrame.__finalize__ = _finalize
 
 class TestPanel(tm.TestCase, Generic):
     _typ = Panel
@@ -802,6 +1141,83 @@ class TestNDFrame(tm.TestCase):
 
         p4d = tm.makePanel4D().reindex(labels=['label1'],items=['ItemA'])
         tm.assert_frame_equal(p4d.squeeze(),p4d.ix['label1','ItemA'])
+
+    def test_equals(self):
+        s1 = pd.Series([1, 2, 3], index=[0, 2, 1])
+        s2 = s1.copy()
+        self.assertTrue(s1.equals(s2))
+
+        s1[1] = 99
+        self.assertFalse(s1.equals(s2))
+
+        # NaNs compare as equal
+        s1 = pd.Series([1, np.nan, 3, np.nan], index=[0, 2, 1, 3])
+        s2 = s1.copy()
+        self.assertTrue(s1.equals(s2))
+
+        s2[0] = 9.9
+        self.assertFalse(s1.equals(s2))
+
+        idx = MultiIndex.from_tuples([(0, 'a'), (1, 'b'), (2, 'c')])
+        s1 = Series([1, 2, np.nan], index=idx)
+        s2 = s1.copy()
+        self.assertTrue(s1.equals(s2))
+
+        # Add object dtype column with nans
+        index = np.random.random(10)
+        df1 = DataFrame(np.random.random(10,), index=index, columns=['floats'])
+        df1['text'] = 'the sky is so blue. we could use more chocolate.'.split()
+        df1['start'] = date_range('2000-1-1', periods=10, freq='T')
+        df1['end'] = date_range('2000-1-1', periods=10, freq='D')
+        df1['diff'] = df1['end'] - df1['start']
+        df1['bool'] = (np.arange(10) % 3 == 0)
+        df1.ix[::2] = nan
+        df2 = df1.copy()
+        self.assertTrue(df1['text'].equals(df2['text']))
+        self.assertTrue(df1['start'].equals(df2['start']))
+        self.assertTrue(df1['end'].equals(df2['end']))
+        self.assertTrue(df1['diff'].equals(df2['diff']))
+        self.assertTrue(df1['bool'].equals(df2['bool']))
+        self.assertTrue(df1.equals(df2))
+        self.assertFalse(df1.equals(object))
+
+        # different dtype
+        different = df1.copy()
+        different['floats'] = different['floats'].astype('float32')
+        self.assertFalse(df1.equals(different))
+
+        # different index
+        different_index = -index
+        different = df2.set_index(different_index)
+        self.assertFalse(df1.equals(different))
+
+        # different columns
+        different = df2.copy()
+        different.columns = df2.columns[::-1]
+        self.assertFalse(df1.equals(different))
+
+        # DatetimeIndex
+        index = pd.date_range('2000-1-1', periods=10, freq='T')
+        df1 = df1.set_index(index)
+        df2 = df1.copy()
+        self.assertTrue(df1.equals(df2))
+
+        # MultiIndex
+        df3 = df1.set_index(['text'], append=True)
+        df2 = df1.set_index(['text'], append=True)
+        self.assertTrue(df3.equals(df2))
+
+        df2 = df1.set_index(['floats'], append=True)
+        self.assertFalse(df3.equals(df2))
+
+        # NaN in index
+        df3 = df1.set_index(['floats'], append=True)
+        df2 = df1.set_index(['floats'], append=True)
+        self.assertTrue(df3.equals(df2))
+
+    def test_describe_raises(self):
+        with tm.assertRaises(NotImplementedError):
+            tm.makePanel().describe()
 
 if __name__ == '__main__':
     nose.runmodule(argv=[__file__, '-vvs', '-x', '--pdb', '--pdb-failure'],

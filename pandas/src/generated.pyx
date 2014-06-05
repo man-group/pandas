@@ -27,7 +27,9 @@ from khash cimport *
 ctypedef unsigned char UChar
 
 cimport util
-from util cimport is_array, _checknull, _checknan
+from util cimport is_array, _checknull, _checknan, get_nat
+
+cdef int64_t iNaT = get_nat()
 
 # import datetime C API
 PyDateTime_IMPORT
@@ -2581,9 +2583,9 @@ def take_1d_object_object(ndarray[object] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_bool_bool(ndarray[uint8_t, ndim=2] values,
+def take_2d_axis0_bool_bool(uint8_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[uint8_t, ndim=2] out,
+                                    uint8_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -2596,8 +2598,10 @@ def take_2d_axis0_bool_bool(ndarray[uint8_t, ndim=2] values,
 
     IF True:
         cdef:
-            uint8_t *v, *o
+            uint8_t *v
+            uint8_t *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(uint8_t) and
             sizeof(uint8_t) * n >= 256):
@@ -2624,9 +2628,9 @@ def take_2d_axis0_bool_bool(ndarray[uint8_t, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_bool_object(ndarray[uint8_t, ndim=2] values,
+def take_2d_axis0_bool_object(uint8_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[object, ndim=2] out,
+                                    object[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -2639,8 +2643,10 @@ def take_2d_axis0_bool_object(ndarray[uint8_t, ndim=2] values,
 
     IF False:
         cdef:
-            object *v, *o
+            object *v
+            object *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(object) and
             sizeof(object) * n >= 256):
@@ -2667,9 +2673,9 @@ def take_2d_axis0_bool_object(ndarray[uint8_t, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_int8_int8(ndarray[int8_t, ndim=2] values,
+def take_2d_axis0_int8_int8(int8_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[int8_t, ndim=2] out,
+                                    int8_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -2682,8 +2688,10 @@ def take_2d_axis0_int8_int8(ndarray[int8_t, ndim=2] values,
 
     IF True:
         cdef:
-            int8_t *v, *o
+            int8_t *v
+            int8_t *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(int8_t) and
             sizeof(int8_t) * n >= 256):
@@ -2710,9 +2718,9 @@ def take_2d_axis0_int8_int8(ndarray[int8_t, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_int8_int32(ndarray[int8_t, ndim=2] values,
+def take_2d_axis0_int8_int32(int8_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[int32_t, ndim=2] out,
+                                    int32_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -2725,8 +2733,10 @@ def take_2d_axis0_int8_int32(ndarray[int8_t, ndim=2] values,
 
     IF False:
         cdef:
-            int32_t *v, *o
+            int32_t *v
+            int32_t *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(int32_t) and
             sizeof(int32_t) * n >= 256):
@@ -2753,9 +2763,9 @@ def take_2d_axis0_int8_int32(ndarray[int8_t, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_int8_int64(ndarray[int8_t, ndim=2] values,
+def take_2d_axis0_int8_int64(int8_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[int64_t, ndim=2] out,
+                                    int64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -2768,8 +2778,10 @@ def take_2d_axis0_int8_int64(ndarray[int8_t, ndim=2] values,
 
     IF False:
         cdef:
-            int64_t *v, *o
+            int64_t *v
+            int64_t *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(int64_t) and
             sizeof(int64_t) * n >= 256):
@@ -2796,9 +2808,9 @@ def take_2d_axis0_int8_int64(ndarray[int8_t, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_int8_float64(ndarray[int8_t, ndim=2] values,
+def take_2d_axis0_int8_float64(int8_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[float64_t, ndim=2] out,
+                                    float64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -2811,8 +2823,10 @@ def take_2d_axis0_int8_float64(ndarray[int8_t, ndim=2] values,
 
     IF False:
         cdef:
-            float64_t *v, *o
+            float64_t *v
+            float64_t *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(float64_t) and
             sizeof(float64_t) * n >= 256):
@@ -2839,9 +2853,9 @@ def take_2d_axis0_int8_float64(ndarray[int8_t, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_int16_int16(ndarray[int16_t, ndim=2] values,
+def take_2d_axis0_int16_int16(int16_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[int16_t, ndim=2] out,
+                                    int16_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -2854,8 +2868,10 @@ def take_2d_axis0_int16_int16(ndarray[int16_t, ndim=2] values,
 
     IF True:
         cdef:
-            int16_t *v, *o
+            int16_t *v
+            int16_t *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(int16_t) and
             sizeof(int16_t) * n >= 256):
@@ -2882,9 +2898,9 @@ def take_2d_axis0_int16_int16(ndarray[int16_t, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_int16_int32(ndarray[int16_t, ndim=2] values,
+def take_2d_axis0_int16_int32(int16_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[int32_t, ndim=2] out,
+                                    int32_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -2897,8 +2913,10 @@ def take_2d_axis0_int16_int32(ndarray[int16_t, ndim=2] values,
 
     IF False:
         cdef:
-            int32_t *v, *o
+            int32_t *v
+            int32_t *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(int32_t) and
             sizeof(int32_t) * n >= 256):
@@ -2925,9 +2943,9 @@ def take_2d_axis0_int16_int32(ndarray[int16_t, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_int16_int64(ndarray[int16_t, ndim=2] values,
+def take_2d_axis0_int16_int64(int16_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[int64_t, ndim=2] out,
+                                    int64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -2940,8 +2958,10 @@ def take_2d_axis0_int16_int64(ndarray[int16_t, ndim=2] values,
 
     IF False:
         cdef:
-            int64_t *v, *o
+            int64_t *v
+            int64_t *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(int64_t) and
             sizeof(int64_t) * n >= 256):
@@ -2968,9 +2988,9 @@ def take_2d_axis0_int16_int64(ndarray[int16_t, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_int16_float64(ndarray[int16_t, ndim=2] values,
+def take_2d_axis0_int16_float64(int16_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[float64_t, ndim=2] out,
+                                    float64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -2983,8 +3003,10 @@ def take_2d_axis0_int16_float64(ndarray[int16_t, ndim=2] values,
 
     IF False:
         cdef:
-            float64_t *v, *o
+            float64_t *v
+            float64_t *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(float64_t) and
             sizeof(float64_t) * n >= 256):
@@ -3011,9 +3033,9 @@ def take_2d_axis0_int16_float64(ndarray[int16_t, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_int32_int32(ndarray[int32_t, ndim=2] values,
+def take_2d_axis0_int32_int32(int32_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[int32_t, ndim=2] out,
+                                    int32_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3026,8 +3048,10 @@ def take_2d_axis0_int32_int32(ndarray[int32_t, ndim=2] values,
 
     IF True:
         cdef:
-            int32_t *v, *o
+            int32_t *v
+            int32_t *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(int32_t) and
             sizeof(int32_t) * n >= 256):
@@ -3054,9 +3078,9 @@ def take_2d_axis0_int32_int32(ndarray[int32_t, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_int32_int64(ndarray[int32_t, ndim=2] values,
+def take_2d_axis0_int32_int64(int32_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[int64_t, ndim=2] out,
+                                    int64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3069,8 +3093,10 @@ def take_2d_axis0_int32_int64(ndarray[int32_t, ndim=2] values,
 
     IF False:
         cdef:
-            int64_t *v, *o
+            int64_t *v
+            int64_t *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(int64_t) and
             sizeof(int64_t) * n >= 256):
@@ -3097,9 +3123,9 @@ def take_2d_axis0_int32_int64(ndarray[int32_t, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_int32_float64(ndarray[int32_t, ndim=2] values,
+def take_2d_axis0_int32_float64(int32_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[float64_t, ndim=2] out,
+                                    float64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3112,8 +3138,10 @@ def take_2d_axis0_int32_float64(ndarray[int32_t, ndim=2] values,
 
     IF False:
         cdef:
-            float64_t *v, *o
+            float64_t *v
+            float64_t *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(float64_t) and
             sizeof(float64_t) * n >= 256):
@@ -3140,9 +3168,9 @@ def take_2d_axis0_int32_float64(ndarray[int32_t, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_int64_int64(ndarray[int64_t, ndim=2] values,
+def take_2d_axis0_int64_int64(int64_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[int64_t, ndim=2] out,
+                                    int64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3155,8 +3183,10 @@ def take_2d_axis0_int64_int64(ndarray[int64_t, ndim=2] values,
 
     IF True:
         cdef:
-            int64_t *v, *o
+            int64_t *v
+            int64_t *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(int64_t) and
             sizeof(int64_t) * n >= 256):
@@ -3183,9 +3213,9 @@ def take_2d_axis0_int64_int64(ndarray[int64_t, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_int64_float64(ndarray[int64_t, ndim=2] values,
+def take_2d_axis0_int64_float64(int64_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[float64_t, ndim=2] out,
+                                    float64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3198,8 +3228,10 @@ def take_2d_axis0_int64_float64(ndarray[int64_t, ndim=2] values,
 
     IF False:
         cdef:
-            float64_t *v, *o
+            float64_t *v
+            float64_t *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(float64_t) and
             sizeof(float64_t) * n >= 256):
@@ -3226,9 +3258,9 @@ def take_2d_axis0_int64_float64(ndarray[int64_t, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_float32_float32(ndarray[float32_t, ndim=2] values,
+def take_2d_axis0_float32_float32(float32_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[float32_t, ndim=2] out,
+                                    float32_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3241,8 +3273,10 @@ def take_2d_axis0_float32_float32(ndarray[float32_t, ndim=2] values,
 
     IF True:
         cdef:
-            float32_t *v, *o
+            float32_t *v
+            float32_t *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(float32_t) and
             sizeof(float32_t) * n >= 256):
@@ -3269,9 +3303,9 @@ def take_2d_axis0_float32_float32(ndarray[float32_t, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_float32_float64(ndarray[float32_t, ndim=2] values,
+def take_2d_axis0_float32_float64(float32_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[float64_t, ndim=2] out,
+                                    float64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3284,8 +3318,10 @@ def take_2d_axis0_float32_float64(ndarray[float32_t, ndim=2] values,
 
     IF False:
         cdef:
-            float64_t *v, *o
+            float64_t *v
+            float64_t *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(float64_t) and
             sizeof(float64_t) * n >= 256):
@@ -3312,9 +3348,9 @@ def take_2d_axis0_float32_float64(ndarray[float32_t, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_float64_float64(ndarray[float64_t, ndim=2] values,
+def take_2d_axis0_float64_float64(float64_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[float64_t, ndim=2] out,
+                                    float64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3327,8 +3363,10 @@ def take_2d_axis0_float64_float64(ndarray[float64_t, ndim=2] values,
 
     IF True:
         cdef:
-            float64_t *v, *o
+            float64_t *v
+            float64_t *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(float64_t) and
             sizeof(float64_t) * n >= 256):
@@ -3355,9 +3393,9 @@ def take_2d_axis0_float64_float64(ndarray[float64_t, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_object_object(ndarray[object, ndim=2] values,
+def take_2d_axis0_object_object(object[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[object, ndim=2] out,
+                                    object[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3370,8 +3408,10 @@ def take_2d_axis0_object_object(ndarray[object, ndim=2] values,
 
     IF False:
         cdef:
-            object *v, *o
+            object *v
+            object *o
 
+        #GH3130
         if (values.strides[1] == out.strides[1] and
             values.strides[1] == sizeof(object) and
             sizeof(object) * n >= 256):
@@ -3399,9 +3439,9 @@ def take_2d_axis0_object_object(ndarray[object, ndim=2] values,
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_bool_bool(ndarray[uint8_t, ndim=2] values,
+def take_2d_axis1_bool_bool(uint8_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[uint8_t, ndim=2] out,
+                                    uint8_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3415,39 +3455,19 @@ def take_2d_axis1_bool_bool(ndarray[uint8_t, ndim=2] values,
 
     fv = fill_value
 
-    IF True:
-        cdef:
-            uint8_t *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(uint8_t) and
-            sizeof(uint8_t) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(uint8_t) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = values[i, idx]
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_bool_object(ndarray[uint8_t, ndim=2] values,
+def take_2d_axis1_bool_object(uint8_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[object, ndim=2] out,
+                                    object[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3461,39 +3481,19 @@ def take_2d_axis1_bool_object(ndarray[uint8_t, ndim=2] values,
 
     fv = fill_value
 
-    IF False:
-        cdef:
-            object *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(object) and
-            sizeof(object) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(object) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = True if values[i, idx] > 0 else False
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_int8_int8(ndarray[int8_t, ndim=2] values,
+def take_2d_axis1_int8_int8(int8_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[int8_t, ndim=2] out,
+                                    int8_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3507,39 +3507,19 @@ def take_2d_axis1_int8_int8(ndarray[int8_t, ndim=2] values,
 
     fv = fill_value
 
-    IF True:
-        cdef:
-            int8_t *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(int8_t) and
-            sizeof(int8_t) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(int8_t) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = values[i, idx]
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_int8_int32(ndarray[int8_t, ndim=2] values,
+def take_2d_axis1_int8_int32(int8_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[int32_t, ndim=2] out,
+                                    int32_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3553,39 +3533,19 @@ def take_2d_axis1_int8_int32(ndarray[int8_t, ndim=2] values,
 
     fv = fill_value
 
-    IF False:
-        cdef:
-            int32_t *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(int32_t) and
-            sizeof(int32_t) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(int32_t) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = values[i, idx]
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_int8_int64(ndarray[int8_t, ndim=2] values,
+def take_2d_axis1_int8_int64(int8_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[int64_t, ndim=2] out,
+                                    int64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3599,39 +3559,19 @@ def take_2d_axis1_int8_int64(ndarray[int8_t, ndim=2] values,
 
     fv = fill_value
 
-    IF False:
-        cdef:
-            int64_t *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(int64_t) and
-            sizeof(int64_t) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(int64_t) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = values[i, idx]
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_int8_float64(ndarray[int8_t, ndim=2] values,
+def take_2d_axis1_int8_float64(int8_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[float64_t, ndim=2] out,
+                                    float64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3645,39 +3585,19 @@ def take_2d_axis1_int8_float64(ndarray[int8_t, ndim=2] values,
 
     fv = fill_value
 
-    IF False:
-        cdef:
-            float64_t *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(float64_t) and
-            sizeof(float64_t) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(float64_t) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = values[i, idx]
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_int16_int16(ndarray[int16_t, ndim=2] values,
+def take_2d_axis1_int16_int16(int16_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[int16_t, ndim=2] out,
+                                    int16_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3691,39 +3611,19 @@ def take_2d_axis1_int16_int16(ndarray[int16_t, ndim=2] values,
 
     fv = fill_value
 
-    IF True:
-        cdef:
-            int16_t *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(int16_t) and
-            sizeof(int16_t) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(int16_t) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = values[i, idx]
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_int16_int32(ndarray[int16_t, ndim=2] values,
+def take_2d_axis1_int16_int32(int16_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[int32_t, ndim=2] out,
+                                    int32_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3737,39 +3637,19 @@ def take_2d_axis1_int16_int32(ndarray[int16_t, ndim=2] values,
 
     fv = fill_value
 
-    IF False:
-        cdef:
-            int32_t *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(int32_t) and
-            sizeof(int32_t) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(int32_t) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = values[i, idx]
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_int16_int64(ndarray[int16_t, ndim=2] values,
+def take_2d_axis1_int16_int64(int16_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[int64_t, ndim=2] out,
+                                    int64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3783,39 +3663,19 @@ def take_2d_axis1_int16_int64(ndarray[int16_t, ndim=2] values,
 
     fv = fill_value
 
-    IF False:
-        cdef:
-            int64_t *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(int64_t) and
-            sizeof(int64_t) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(int64_t) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = values[i, idx]
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_int16_float64(ndarray[int16_t, ndim=2] values,
+def take_2d_axis1_int16_float64(int16_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[float64_t, ndim=2] out,
+                                    float64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3829,39 +3689,19 @@ def take_2d_axis1_int16_float64(ndarray[int16_t, ndim=2] values,
 
     fv = fill_value
 
-    IF False:
-        cdef:
-            float64_t *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(float64_t) and
-            sizeof(float64_t) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(float64_t) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = values[i, idx]
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_int32_int32(ndarray[int32_t, ndim=2] values,
+def take_2d_axis1_int32_int32(int32_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[int32_t, ndim=2] out,
+                                    int32_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3875,39 +3715,19 @@ def take_2d_axis1_int32_int32(ndarray[int32_t, ndim=2] values,
 
     fv = fill_value
 
-    IF True:
-        cdef:
-            int32_t *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(int32_t) and
-            sizeof(int32_t) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(int32_t) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = values[i, idx]
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_int32_int64(ndarray[int32_t, ndim=2] values,
+def take_2d_axis1_int32_int64(int32_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[int64_t, ndim=2] out,
+                                    int64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3921,39 +3741,19 @@ def take_2d_axis1_int32_int64(ndarray[int32_t, ndim=2] values,
 
     fv = fill_value
 
-    IF False:
-        cdef:
-            int64_t *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(int64_t) and
-            sizeof(int64_t) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(int64_t) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = values[i, idx]
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_int32_float64(ndarray[int32_t, ndim=2] values,
+def take_2d_axis1_int32_float64(int32_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[float64_t, ndim=2] out,
+                                    float64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -3967,39 +3767,19 @@ def take_2d_axis1_int32_float64(ndarray[int32_t, ndim=2] values,
 
     fv = fill_value
 
-    IF False:
-        cdef:
-            float64_t *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(float64_t) and
-            sizeof(float64_t) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(float64_t) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = values[i, idx]
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_int64_int64(ndarray[int64_t, ndim=2] values,
+def take_2d_axis1_int64_int64(int64_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[int64_t, ndim=2] out,
+                                    int64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -4013,39 +3793,19 @@ def take_2d_axis1_int64_int64(ndarray[int64_t, ndim=2] values,
 
     fv = fill_value
 
-    IF True:
-        cdef:
-            int64_t *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(int64_t) and
-            sizeof(int64_t) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(int64_t) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = values[i, idx]
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_int64_float64(ndarray[int64_t, ndim=2] values,
+def take_2d_axis1_int64_float64(int64_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[float64_t, ndim=2] out,
+                                    float64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -4059,39 +3819,19 @@ def take_2d_axis1_int64_float64(ndarray[int64_t, ndim=2] values,
 
     fv = fill_value
 
-    IF False:
-        cdef:
-            float64_t *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(float64_t) and
-            sizeof(float64_t) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(float64_t) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = values[i, idx]
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_float32_float32(ndarray[float32_t, ndim=2] values,
+def take_2d_axis1_float32_float32(float32_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[float32_t, ndim=2] out,
+                                    float32_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -4105,39 +3845,19 @@ def take_2d_axis1_float32_float32(ndarray[float32_t, ndim=2] values,
 
     fv = fill_value
 
-    IF True:
-        cdef:
-            float32_t *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(float32_t) and
-            sizeof(float32_t) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(float32_t) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = values[i, idx]
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_float32_float64(ndarray[float32_t, ndim=2] values,
+def take_2d_axis1_float32_float64(float32_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[float64_t, ndim=2] out,
+                                    float64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -4151,39 +3871,19 @@ def take_2d_axis1_float32_float64(ndarray[float32_t, ndim=2] values,
 
     fv = fill_value
 
-    IF False:
-        cdef:
-            float64_t *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(float64_t) and
-            sizeof(float64_t) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(float64_t) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = values[i, idx]
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_float64_float64(ndarray[float64_t, ndim=2] values,
+def take_2d_axis1_float64_float64(float64_t[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[float64_t, ndim=2] out,
+                                    float64_t[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -4197,39 +3897,19 @@ def take_2d_axis1_float64_float64(ndarray[float64_t, ndim=2] values,
 
     fv = fill_value
 
-    IF True:
-        cdef:
-            float64_t *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(float64_t) and
-            sizeof(float64_t) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(float64_t) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = values[i, idx]
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_object_object(ndarray[object, ndim=2] values,
+def take_2d_axis1_object_object(object[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[object, ndim=2] out,
+                                    object[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -4243,32 +3923,12 @@ def take_2d_axis1_object_object(ndarray[object, ndim=2] values,
 
     fv = fill_value
 
-    IF False:
-        cdef:
-            object *v, *o
-
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(object) and
-            sizeof(object) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(object) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = values[i, idx]
 
 
@@ -6962,6 +6622,288 @@ def group_ohlc_float32(ndarray[float32_t, ndim=2] out,
             out[b, 1] = vhigh
             out[b, 2] = vlow
             out[b, 3] = vclose
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def group_count_float64(ndarray[float64_t, ndim=2] out,
+                         ndarray[int64_t] counts,
+                         ndarray[float64_t, ndim=2] values,
+                         ndarray[int64_t] labels):
+    '''
+    Only aggregates on axis=0
+    '''
+    cdef:
+        Py_ssize_t i, j, lab
+        Py_ssize_t N = values.shape[0], K = values.shape[1]
+        float64_t val
+        ndarray[int64_t, ndim=2] nobs = np.zeros((out.shape[0], out.shape[1]),
+                                                 dtype=np.int64)
+
+    if len(values) != len(labels):
+       raise AssertionError("len(index) != len(labels)")
+
+    for i in range(N):
+        lab = labels[i]
+        if lab < 0:
+            continue
+
+        counts[lab] += 1
+        for j in range(K):
+            val = values[i, j]
+
+            # not nan
+            nobs[lab, j] += val == val and val != iNaT
+
+    for i in range(len(counts)):
+        for j in range(K):
+            out[i, j] = nobs[i, j]
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def group_count_float32(ndarray[float32_t, ndim=2] out,
+                         ndarray[int64_t] counts,
+                         ndarray[float32_t, ndim=2] values,
+                         ndarray[int64_t] labels):
+    '''
+    Only aggregates on axis=0
+    '''
+    cdef:
+        Py_ssize_t i, j, lab
+        Py_ssize_t N = values.shape[0], K = values.shape[1]
+        float32_t val
+        ndarray[int64_t, ndim=2] nobs = np.zeros((out.shape[0], out.shape[1]),
+                                                 dtype=np.int64)
+
+    if len(values) != len(labels):
+       raise AssertionError("len(index) != len(labels)")
+
+    for i in range(N):
+        lab = labels[i]
+        if lab < 0:
+            continue
+
+        counts[lab] += 1
+        for j in range(K):
+            val = values[i, j]
+
+            # not nan
+            nobs[lab, j] += val == val and val != iNaT
+
+    for i in range(len(counts)):
+        for j in range(K):
+            out[i, j] = nobs[i, j]
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def group_count_object(ndarray[float64_t, ndim=2] out,
+                         ndarray[int64_t] counts,
+                         ndarray[object, ndim=2] values,
+                         ndarray[int64_t] labels):
+    '''
+    Only aggregates on axis=0
+    '''
+    cdef:
+        Py_ssize_t i, j, lab
+        Py_ssize_t N = values.shape[0], K = values.shape[1]
+        object val
+        ndarray[int64_t, ndim=2] nobs = np.zeros((out.shape[0], out.shape[1]),
+                                                 dtype=np.int64)
+
+    if len(values) != len(labels):
+       raise AssertionError("len(index) != len(labels)")
+
+    for i in range(N):
+        lab = labels[i]
+        if lab < 0:
+            continue
+
+        counts[lab] += 1
+        for j in range(K):
+            val = values[i, j]
+
+            # not nan
+            nobs[lab, j] += val == val and val != iNaT
+
+    for i in range(len(counts)):
+        for j in range(K):
+            out[i, j] = nobs[i, j]
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def group_count_int64(ndarray[float64_t, ndim=2] out,
+                         ndarray[int64_t] counts,
+                         ndarray[int64_t, ndim=2] values,
+                         ndarray[int64_t] labels):
+    '''
+    Only aggregates on axis=0
+    '''
+    cdef:
+        Py_ssize_t i, j, lab
+        Py_ssize_t N = values.shape[0], K = values.shape[1]
+        int64_t val
+        ndarray[int64_t, ndim=2] nobs = np.zeros((out.shape[0], out.shape[1]),
+                                                 dtype=np.int64)
+
+    if len(values) != len(labels):
+       raise AssertionError("len(index) != len(labels)")
+
+    for i in range(N):
+        lab = labels[i]
+        if lab < 0:
+            continue
+
+        counts[lab] += 1
+        for j in range(K):
+            val = values[i, j]
+
+            # not nan
+            nobs[lab, j] += val == val and val != iNaT
+
+    for i in range(len(counts)):
+        for j in range(K):
+            out[i, j] = nobs[i, j]
+
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def group_count_bin_float64(ndarray[float64_t, ndim=2] out,
+                             ndarray[int64_t] counts,
+                             ndarray[float64_t, ndim=2] values,
+                             ndarray[int64_t] bins):
+    '''
+    Only aggregates on axis=0
+    '''
+    cdef:
+        Py_ssize_t i, j, ngroups
+        Py_ssize_t N = values.shape[0], K = values.shape[1], b = 0
+        float64_t val
+        ndarray[int64_t, ndim=2] nobs = np.zeros((out.shape[0], out.shape[1]),
+                                                 dtype=np.int64)
+
+    ngroups = len(bins) + (bins[len(bins) - 1] != N)
+
+    for i in range(N):
+        while b < ngroups - 1 and i >= bins[b]:
+            b += 1
+
+        counts[b] += 1
+        for j in range(K):
+            val = values[i, j]
+
+            # not nan
+            nobs[b, j] += val == val and val != iNaT
+
+    for i in range(ngroups):
+        for j in range(K):
+            out[i, j] = nobs[i, j]
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def group_count_bin_float32(ndarray[float32_t, ndim=2] out,
+                             ndarray[int64_t] counts,
+                             ndarray[float32_t, ndim=2] values,
+                             ndarray[int64_t] bins):
+    '''
+    Only aggregates on axis=0
+    '''
+    cdef:
+        Py_ssize_t i, j, ngroups
+        Py_ssize_t N = values.shape[0], K = values.shape[1], b = 0
+        float32_t val
+        ndarray[int64_t, ndim=2] nobs = np.zeros((out.shape[0], out.shape[1]),
+                                                 dtype=np.int64)
+
+    ngroups = len(bins) + (bins[len(bins) - 1] != N)
+
+    for i in range(N):
+        while b < ngroups - 1 and i >= bins[b]:
+            b += 1
+
+        counts[b] += 1
+        for j in range(K):
+            val = values[i, j]
+
+            # not nan
+            nobs[b, j] += val == val and val != iNaT
+
+    for i in range(ngroups):
+        for j in range(K):
+            out[i, j] = nobs[i, j]
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def group_count_bin_object(ndarray[float64_t, ndim=2] out,
+                             ndarray[int64_t] counts,
+                             ndarray[object, ndim=2] values,
+                             ndarray[int64_t] bins):
+    '''
+    Only aggregates on axis=0
+    '''
+    cdef:
+        Py_ssize_t i, j, ngroups
+        Py_ssize_t N = values.shape[0], K = values.shape[1], b = 0
+        object val
+        ndarray[int64_t, ndim=2] nobs = np.zeros((out.shape[0], out.shape[1]),
+                                                 dtype=np.int64)
+
+    ngroups = len(bins) + (bins[len(bins) - 1] != N)
+
+    for i in range(N):
+        while b < ngroups - 1 and i >= bins[b]:
+            b += 1
+
+        counts[b] += 1
+        for j in range(K):
+            val = values[i, j]
+
+            # not nan
+            nobs[b, j] += val == val and val != iNaT
+
+    for i in range(ngroups):
+        for j in range(K):
+            out[i, j] = nobs[i, j]
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def group_count_bin_int64(ndarray[float64_t, ndim=2] out,
+                             ndarray[int64_t] counts,
+                             ndarray[int64_t, ndim=2] values,
+                             ndarray[int64_t] bins):
+    '''
+    Only aggregates on axis=0
+    '''
+    cdef:
+        Py_ssize_t i, j, ngroups
+        Py_ssize_t N = values.shape[0], K = values.shape[1], b = 0
+        int64_t val
+        ndarray[int64_t, ndim=2] nobs = np.zeros((out.shape[0], out.shape[1]),
+                                                 dtype=np.int64)
+
+    ngroups = len(bins) + (bins[len(bins) - 1] != N)
+
+    for i in range(N):
+        while b < ngroups - 1 and i >= bins[b]:
+            b += 1
+
+        counts[b] += 1
+        for j in range(K):
+            val = values[i, j]
+
+            # not nan
+            nobs[b, j] += val == val and val != iNaT
+
+    for i in range(ngroups):
+        for j in range(K):
+            out[i, j] = nobs[i, j]
+
+
 
 @cython.wraparound(False)
 @cython.boundscheck(False)

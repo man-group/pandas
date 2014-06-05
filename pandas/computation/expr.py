@@ -7,262 +7,130 @@ import sys
 import inspect
 import tokenize
 import datetime
-import struct
 
 from functools import partial
 
 import pandas as pd
 from pandas import compat
-from pandas.compat import StringIO, zip, reduce, string_types
+from pandas.compat import StringIO, lmap, zip, reduce, string_types
 from pandas.core.base import StringMixin
 from pandas.core import common as com
-from pandas.computation.common import NameResolutionError
+from pandas.tools.util import compose
 from pandas.computation.ops import (_cmp_ops_syms, _bool_ops_syms,
                                     _arith_ops_syms, _unary_ops_syms, is_term)
 from pandas.computation.ops import _reductions, _mathops, _LOCAL_TAG
 from pandas.computation.ops import Op, BinOp, UnaryOp, Term, Constant, Div
 from pandas.computation.ops import UndefinedVariableError
+from pandas.computation.scope import Scope, _ensure_scope
 
 
-def _ensure_scope(level=2, global_dict=None, local_dict=None, resolvers=None,
-                  target=None, **kwargs):
-    """Ensure that we are grabbing the correct scope."""
-    return Scope(gbls=global_dict, lcls=local_dict, level=level,
-                 resolvers=resolvers, target=target)
-
-
-def _check_disjoint_resolver_names(resolver_keys, local_keys, global_keys):
-    """Make sure that variables in resolvers don't overlap with locals or
-    globals.
-    """
-    res_locals = list(com.intersection(resolver_keys, local_keys))
-    if res_locals:
-        msg = "resolvers and locals overlap on names {0}".format(res_locals)
-        raise NameResolutionError(msg)
-
-    res_globals = list(com.intersection(resolver_keys, global_keys))
-    if res_globals:
-        msg = "resolvers and globals overlap on names {0}".format(res_globals)
-        raise NameResolutionError(msg)
-
-
-def _replacer(x, pad_size):
-    """Replace a number with its padded hexadecimal representation. Used to tag
-    temporary variables with their calling scope's id.
-    """
-    # get the hex repr of the binary char and remove 0x and pad by pad_size
-    # zeros
-    try:
-        hexin = ord(x)
-    except TypeError:
-        # bytes literals masquerade as ints when iterating in py3
-        hexin = x
-
-    return hex(hexin).replace('0x', '').rjust(pad_size, '0')
-
-
-def _raw_hex_id(obj, pad_size=2):
-    """Return the padded hexadecimal id of ``obj``."""
-    # interpret as a pointer since that's what really what id returns
-    packed = struct.pack('@P', id(obj))
-
-    return ''.join(_replacer(x, pad_size) for x in packed)
-
-
-class Scope(StringMixin):
-
-    """Object to hold scope, with a few bells to deal with some custom syntax
-    added by pandas.
+def tokenize_string(source):
+    """Tokenize a Python source code string.
 
     Parameters
     ----------
-    gbls : dict or None, optional, default None
-    lcls : dict or Scope or None, optional, default None
-    level : int, optional, default 1
-    resolvers : list-like or None, optional, default None
+    source : str
+        A Python source code string
+    """
+    line_reader = StringIO(source).readline
+    for toknum, tokval, _, _, _ in tokenize.generate_tokens(line_reader):
+        yield toknum, tokval
 
-    Attributes
+
+def _rewrite_assign(tok):
+    """Rewrite the assignment operator for PyTables expressions that use ``=``
+    as a substitute for ``==``.
+
+    Parameters
     ----------
-    globals : dict
-    locals : dict
-    level : int
-    resolvers : tuple
-    resolver_keys : frozenset
+    tok : tuple of int, str
+        ints correspond to the all caps constants in the tokenize module
+
+    Returns
+    -------
+    t : tuple of int, str
+        Either the input or token or the replacement values
     """
-    __slots__ = ('globals', 'locals', 'resolvers', '_global_resolvers',
-                 'resolver_keys', '_resolver', 'level', 'ntemps', 'target')
-
-    def __init__(self, gbls=None, lcls=None, level=1, resolvers=None,
-                 target=None):
-        self.level = level
-        self.resolvers = tuple(resolvers or [])
-        self.globals = dict()
-        self.locals = dict()
-        self.target = target
-        self.ntemps = 1  # number of temporary variables in this scope
-
-        if isinstance(lcls, Scope):
-            ld, lcls = lcls, dict()
-            self.locals.update(ld.locals.copy())
-            self.globals.update(ld.globals.copy())
-            self.resolvers += ld.resolvers
-            if ld.target is not None:
-                self.target = ld.target
-            self.update(ld.level)
-
-        frame = sys._getframe(level)
-        try:
-            self.globals.update(gbls or frame.f_globals)
-            self.locals.update(lcls or frame.f_locals)
-        finally:
-            del frame
-
-        # add some useful defaults
-        self.globals['Timestamp'] = pd.lib.Timestamp
-        self.globals['datetime'] = datetime
-
-        # SUCH a hack
-        self.globals['True'] = True
-        self.globals['False'] = False
-
-        # function defs
-        self.globals['list'] = list
-        self.globals['tuple'] = tuple
-
-        res_keys = (list(o.keys()) for o in self.resolvers)
-        self.resolver_keys = frozenset(reduce(operator.add, res_keys, []))
-        self._global_resolvers = self.resolvers + (self.locals, self.globals)
-        self._resolver = None
-
-        self.resolver_dict = {}
-        for o in self.resolvers:
-            self.resolver_dict.update(dict(o))
-
-    def __unicode__(self):
-        return com.pprint_thing(
-            'locals: {0}\nglobals: {0}\nresolvers: '
-            '{0}\ntarget: {0}'.format(list(self.locals.keys()),
-                                      list(self.globals.keys()),
-                                      list(self.resolver_keys),
-                                      self.target))
-
-    def __getitem__(self, key):
-        return self.resolve(key, globally=False)
-
-    def resolve(self, key, globally=False):
-        resolvers = self.locals, self.globals
-        if globally:
-            resolvers = self._global_resolvers
-
-        for resolver in resolvers:
-            try:
-                return resolver[key]
-            except KeyError:
-                pass
-
-    def update(self, level=None):
-        """Update the current scope by going back `level` levels.
-
-        Parameters
-        ----------
-        level : int or None, optional, default None
-        """
-        # we are always 2 levels below the caller
-        # plus the caller may be below the env level
-        # in which case we need addtl levels
-        sl = 2
-        if level is not None:
-            sl += level
-
-        # add sl frames to the scope starting with the
-        # most distant and overwritting with more current
-        # makes sure that we can capture variable scope
-        frame = inspect.currentframe()
-        try:
-            frames = []
-            while sl >= 0:
-                frame = frame.f_back
-                sl -= 1
-                if frame is None:
-                    break
-                frames.append(frame)
-            for f in frames[::-1]:
-                self.locals.update(f.f_locals)
-                self.globals.update(f.f_globals)
-        finally:
-            del frame, frames
-
-    def add_tmp(self, value, where='locals'):
-        """Add a temporary variable to the scope.
-
-        Parameters
-        ----------
-        value : object
-            An arbitrary object to be assigned to a temporary variable.
-        where : basestring, optional, default 'locals', {'locals', 'globals'}
-            What scope to add the value to.
-
-        Returns
-        -------
-        name : basestring
-            The name of the temporary variable created.
-        """
-        d = getattr(self, where, None)
-
-        if d is None:
-            raise AttributeError("Cannot add value to non-existent scope "
-                                 "{0!r}".format(where))
-        if not isinstance(d, dict):
-            raise TypeError("Cannot add value to object of type {0!r}, "
-                            "scope must be a dictionary"
-                            "".format(type(d).__name__))
-        name = 'tmp_var_{0}_{1}_{2}'.format(type(value).__name__, self.ntemps,
-                                            _raw_hex_id(self))
-        d[name] = value
-
-        # only increment if the variable gets put in the scope
-        self.ntemps += 1
-        return name
-
-    def remove_tmp(self, name, where='locals'):
-        d = getattr(self, where, None)
-        if d is None:
-            raise AttributeError("Cannot remove value from non-existent scope "
-                                 "{0!r}".format(where))
-        if not isinstance(d, dict):
-            raise TypeError("Cannot remove value from object of type {0!r}, "
-                            "scope must be a dictionary"
-                            "".format(type(d).__name__))
-        del d[name]
-        self.ntemps -= 1
+    toknum, tokval = tok
+    return toknum, '==' if tokval == '=' else tokval
 
 
-def _rewrite_assign(source):
-    """Rewrite the assignment operator for PyTables expression that want to use
-    ``=`` as a substitute for ``==``.
-    """
-    res = []
-    g = tokenize.generate_tokens(StringIO(source).readline)
-    for toknum, tokval, _, _, _ in g:
-        res.append((toknum, '==' if tokval == '=' else tokval))
-    return tokenize.untokenize(res)
-
-
-def _replace_booleans(source):
+def _replace_booleans(tok):
     """Replace ``&`` with ``and`` and ``|`` with ``or`` so that bitwise
     precedence is changed to boolean precedence.
+
+    Parameters
+    ----------
+    tok : tuple of int, str
+        ints correspond to the all caps constants in the tokenize module
+
+    Returns
+    -------
+    t : tuple of int, str
+        Either the input or token or the replacement values
     """
-    return source.replace('|', ' or ').replace('&', ' and ')
+    toknum, tokval = tok
+    if toknum == tokenize.OP:
+        if tokval == '&':
+            return tokenize.NAME, 'and'
+        elif tokval == '|':
+            return tokenize.NAME, 'or'
+        return toknum, tokval
+    return toknum, tokval
 
 
-def _replace_locals(source, local_symbol='@'):
-    """Replace local variables with a syntacticall valid name."""
-    return source.replace(local_symbol, _LOCAL_TAG)
+def _replace_locals(tok):
+    """Replace local variables with a syntactically valid name.
+
+    Parameters
+    ----------
+    tok : tuple of int, str
+        ints correspond to the all caps constants in the tokenize module
+
+    Returns
+    -------
+    t : tuple of int, str
+        Either the input or token or the replacement values
+
+    Notes
+    -----
+    This is somewhat of a hack in that we rewrite a string such as ``'@a'`` as
+    ``'__pd_eval_local_a'`` by telling the tokenizer that ``__pd_eval_local_``
+    is a ``tokenize.OP`` and to replace the ``'@'`` symbol with it.
+    """
+    toknum, tokval = tok
+    if toknum == tokenize.OP and tokval == '@':
+        return tokenize.OP, _LOCAL_TAG
+    return toknum, tokval
 
 
-def _preparse(source):
-    """Compose assignment and boolean replacement."""
-    return _replace_booleans(_rewrite_assign(source))
+def _preparse(source, f=compose(_replace_locals, _replace_booleans,
+                                _rewrite_assign)):
+    """Compose a collection of tokenization functions
+
+    Parameters
+    ----------
+    source : str
+        A Python source code string
+    f : callable
+        This takes a tuple of (toknum, tokval) as its argument and returns a
+        tuple with the same structure but possibly different elements. Defaults
+        to the composition of ``_rewrite_assign``, ``_replace_booleans``, and
+        ``_replace_locals``.
+
+    Returns
+    -------
+    s : str
+        Valid Python source code
+
+    Notes
+    -----
+    The `f` parameter can be any callable that takes *and* returns input of the
+    form ``(toknum, tokval)``, where ``toknum`` is one of the constants from
+    the ``tokenize`` module and ``tokval`` is a string.
+    """
+    assert callable(f), 'f must be callable'
+    return tokenize.untokenize(lmap(f, tokenize_string(source)))
 
 
 def _is_type(t):
@@ -440,9 +308,6 @@ class BaseExprVisitor(ast.NodeVisitor):
         if isinstance(node, string_types):
             clean = self.preparser(node)
             node = ast.fix_missing_locations(ast.parse(clean))
-        elif not isinstance(node, ast.AST):
-            raise TypeError("Cannot visit objects of type {0!r}"
-                            "".format(node.__class__.__name__))
 
         method = 'visit_' + node.__class__.__name__
         visitor = getattr(self, method)
@@ -475,12 +340,10 @@ class BaseExprVisitor(ast.NodeVisitor):
             # pop the string variable out of locals and replace it with a list
             # of one string, kind of a hack
             if right_str:
-                self.env.remove_tmp(right.name)
                 name = self.env.add_tmp([right.value])
                 right = self.term_type(name, self.env)
 
             if left_str:
-                self.env.remove_tmp(left.name)
                 name = self.env.add_tmp([left.value])
                 left = self.term_type(name, self.env)
 
@@ -508,8 +371,14 @@ class BaseExprVisitor(ast.NodeVisitor):
 
     def _possibly_evaluate_binop(self, op, op_class, lhs, rhs,
                                  eval_in_python=('in', 'not in'),
-                                 maybe_eval_in_python=('==', '!=')):
+                                 maybe_eval_in_python=('==', '!=', '<', '>',
+                                                       '<=', '>=')):
         res = op(lhs, rhs)
+
+        if res.has_invalid_return_type:
+            raise TypeError("unsupported operand type(s) for {0}:"
+                            " '{1}' and '{2}'".format(res.op, lhs.type,
+                                                      rhs.type))
 
         if self.engine != 'pytables':
             if (res.op in _cmp_ops_syms
@@ -536,8 +405,8 @@ class BaseExprVisitor(ast.NodeVisitor):
         return self._possibly_evaluate_binop(op, op_class, left, right)
 
     def visit_Div(self, node, **kwargs):
-        return lambda lhs, rhs: Div(lhs, rhs,
-                                    truediv=self.env.locals['truediv'])
+        truediv = self.env.scope['truediv']
+        return lambda lhs, rhs: Div(lhs, rhs, truediv)
 
     def visit_UnaryOp(self, node, **kwargs):
         op = self.visit(node.op)
@@ -546,6 +415,9 @@ class BaseExprVisitor(ast.NodeVisitor):
 
     def visit_Name(self, node, **kwargs):
         return self.term_type(node.id, self.env, **kwargs)
+
+    def visit_NameConstant(self, node, **kwargs):
+        return self.const_type(node.value, self.env)
 
     def visit_Num(self, node, **kwargs):
         return self.const_type(node.n, self.env)
@@ -661,7 +533,7 @@ class BaseExprVisitor(ast.NodeVisitor):
 
         args = [self.visit(targ).value for targ in node.args]
         if node.starargs is not None:
-            args = args + self.visit(node.starargs).value
+            args += self.visit(node.starargs).value
 
         keywords = {}
         for key in node.keywords:
@@ -725,7 +597,8 @@ _numexpr_supported_calls = frozenset(_reductions + _mathops)
 class PandasExprVisitor(BaseExprVisitor):
 
     def __init__(self, env, engine, parser,
-                 preparser=lambda x: _replace_locals(_replace_booleans(x))):
+                 preparser=partial(_preparse, f=compose(_replace_locals,
+                                                        _replace_booleans))):
         super(PandasExprVisitor, self).__init__(env, engine, parser, preparser)
 
 
@@ -752,21 +625,20 @@ class Expr(StringMixin):
     """
 
     def __init__(self, expr, engine='numexpr', parser='pandas', env=None,
-                 truediv=True, level=2):
+                 truediv=True, level=0):
         self.expr = expr
-        self.env = _ensure_scope(level=level, local_dict=env)
+        self.env = env or Scope(level=level + 1)
         self.engine = engine
         self.parser = parser
+        self.env.scope['truediv'] = truediv
         self._visitor = _parsers[parser](self.env, self.engine, self.parser)
         self.terms = self.parse()
-        self.truediv = truediv
 
     @property
     def assigner(self):
         return getattr(self._visitor, 'assigner', None)
 
     def __call__(self):
-        self.env.locals['truediv'] = self.truediv
         return self.terms(self.env)
 
     def __unicode__(self):
@@ -779,45 +651,12 @@ class Expr(StringMixin):
         """Parse an expression"""
         return self._visitor.visit(self.expr)
 
-    def align(self):
-        """align a set of Terms"""
-        return self.terms.align(self.env)
-
     @property
     def names(self):
         """Get the names in an expression"""
         if is_term(self.terms):
             return frozenset([self.terms.name])
         return frozenset(term.name for term in com.flatten(self.terms))
-
-    def check_name_clashes(self):
-        env = self.env
-        names = self.names
-        res_keys = frozenset(env.resolver_dict.keys()) & names
-        lcl_keys = frozenset(env.locals.keys()) & names
-        gbl_keys = frozenset(env.globals.keys()) & names
-        _check_disjoint_resolver_names(res_keys, lcl_keys, gbl_keys)
-
-    def add_resolvers_to_locals(self):
-        """Add the extra scope (resolvers) to local scope
-
-        Notes
-        -----
-        This should be done after parsing and pre-evaluation, otherwise
-        unnecessary name clashes will occur.
-        """
-        self.env.locals.update(self.env.resolver_dict)
-
-
-def isexpr(s, check_names=True):
-    """Strict checking for a valid expression."""
-    try:
-        Expr(s, env=_ensure_scope() if check_names else None)
-    except SyntaxError:
-        return False
-    except NameError:
-        return not check_names
-    return True
 
 
 _parsers = {'python': PythonExprVisitor, 'pandas': PandasExprVisitor}

@@ -13,7 +13,8 @@ import pandas as pd
 from pandas.compat import PY3, string_types, text_type
 import pandas.core.common as com
 from pandas.core.base import StringMixin
-from pandas.computation.common import _ensure_decoded
+from pandas.computation.common import _ensure_decoded, _result_type_many
+from pandas.computation.scope import _DEFAULT_GLOBALS
 
 
 _reductions = 'sum', 'prod'
@@ -23,33 +24,18 @@ _mathops = ('sin', 'cos', 'exp', 'log', 'expm1', 'log1p', 'pow', 'div', 'sqrt',
 
 
 _LOCAL_TAG = '__pd_eval_local_'
-_TAG_RE = re.compile('^{0}'.format(_LOCAL_TAG))
 
 
 class UndefinedVariableError(NameError):
 
     """NameError subclass for local variables."""
 
-    def __init__(self, *args):
-        msg = 'name {0!r} is not defined'
-        subbed = _TAG_RE.sub('', args[0])
-        if subbed != args[0]:
-            subbed = '@' + subbed
+    def __init__(self, name, is_local):
+        if is_local:
             msg = 'local variable {0!r} is not defined'
-        super(UndefinedVariableError, self).__init__(msg.format(subbed))
-
-
-def _possibly_update_key(d, value, old_key, new_key=None):
-    if new_key is None:
-        new_key = old_key
-
-    try:
-        del d[old_key]
-    except KeyError:
-        return False
-    else:
-        d[new_key] = value
-        return True
+        else:
+            msg = 'name {0!r} is not defined'
+        super(UndefinedVariableError, self).__init__(msg.format(name))
 
 
 class Term(StringMixin):
@@ -57,21 +43,21 @@ class Term(StringMixin):
     def __new__(cls, name, env, side=None, encoding=None):
         klass = Constant if not isinstance(name, string_types) else cls
         supr_new = super(Term, klass).__new__
-        if PY3:
-            return supr_new(klass)
-        return supr_new(klass, name, env, side=side, encoding=encoding)
+        return supr_new(klass)
 
     def __init__(self, name, env, side=None, encoding=None):
         self._name = name
         self.env = env
         self.side = side
-        self.local = _TAG_RE.search(text_type(name)) is not None
+        tname = text_type(name)
+        self.is_local = (tname.startswith(_LOCAL_TAG) or
+                         tname in _DEFAULT_GLOBALS)
         self._value = self._resolve_name()
         self.encoding = encoding
 
     @property
     def local_name(self):
-        return _TAG_RE.sub('', self.name)
+        return self.name.replace(_LOCAL_TAG, '')
 
     def __unicode__(self):
         return com.pprint_thing(self.name)
@@ -83,19 +69,13 @@ class Term(StringMixin):
         return self
 
     def _resolve_name(self):
-        env = self.env
         key = self.name
-        res = env.resolve(self.local_name, globally=not self.local)
+        res = self.env.resolve(self.local_name, is_local=self.is_local)
         self.update(res)
 
-        if res is None:
-            if not isinstance(key, string_types):
-                return key
-            raise UndefinedVariableError(key)
-
         if hasattr(res, 'ndim') and res.ndim > 2:
-            raise NotImplementedError("N-dimensional objects, where N > 2, are"
-                                      " not supported with eval")
+            raise NotImplementedError("N-dimensional objects, where N > 2,"
+                                      " are not supported with eval")
         return res
 
     def update(self, value):
@@ -108,34 +88,11 @@ class Term(StringMixin):
          ('locals', 'key'),
          ('globals', 'key')]
         """
-        env = self.env
         key = self.name
 
         # if it's a variable name (otherwise a constant)
         if isinstance(key, string_types):
-            if self.local:
-                # get it's name WITHOUT the local tag (defined above)
-                local_name = self.local_name
-
-                # search for the local in the above specified order
-                scope_pairs = product([env.locals, env.globals],
-                                      [local_name, key])
-
-                # a[::2] + a[1::2] but iterators
-                scope_iter = chain(islice(scope_pairs, None, None, 2),
-                                   islice(scope_pairs, 1, None, 2))
-                for d, k in scope_iter:
-                    if _possibly_update_key(d, value, k, key):
-                        break
-                else:
-                    raise UndefinedVariableError(key)
-            else:
-                # otherwise we look in resolvers -> locals -> globals
-                for r in (env.resolver_dict, env.locals, env.globals):
-                    if _possibly_update_key(r, value, key):
-                        break
-                else:
-                    raise UndefinedVariableError(key)
+            self.env.swapkey(self.local_name, key, new_value=value)
 
         self.value = value
 
@@ -191,10 +148,7 @@ class Term(StringMixin):
 
     @property
     def ndim(self):
-        try:
-            return self._value.ndim
-        except AttributeError:
-            return 0
+        return self._value.ndim
 
 
 class Constant(Term):
@@ -216,7 +170,7 @@ _bool_op_map = {'not': '~', 'and': '&', 'or': '|'}
 
 class Op(StringMixin):
 
-    """Hold an operator of unknown arity
+    """Hold an operator of arbitrary arity
     """
 
     def __init__(self, op, operands, *args, **kwargs):
@@ -240,7 +194,17 @@ class Op(StringMixin):
         # clobber types to bool if the op is a boolean operator
         if self.op in (_cmp_ops_syms + _bool_ops_syms):
             return np.bool_
-        return np.result_type(*(term.type for term in com.flatten(self)))
+        return _result_type_many(*(term.type for term in com.flatten(self)))
+
+    @property
+    def has_invalid_return_type(self):
+        types = self.operand_types
+        obj_dtype_set = frozenset([np.dtype('object')])
+        return self.return_type == object and types - obj_dtype_set
+
+    @property
+    def operand_types(self):
+        return frozenset(term.type for term in com.flatten(self))
 
     @property
     def isscalar(self):
@@ -374,7 +338,7 @@ class BinOp(Op):
             The result of an evaluated expression.
         """
         # handle truediv
-        if self.op == '/' and env.locals['truediv']:
+        if self.op == '/' and env.scope['truediv']:
             self.func = op.truediv
 
         # recurse over the left/right nodes
@@ -459,6 +423,10 @@ class BinOp(Op):
             raise NotImplementedError("cannot evaluate scalar only bool ops")
 
 
+def isnumeric(dtype):
+    return issubclass(np.dtype(dtype).type, np.number)
+
+
 class Div(BinOp):
 
     """Div operator to special case casting.
@@ -472,8 +440,14 @@ class Div(BinOp):
         regardless of the value of ``truediv``.
     """
 
-    def __init__(self, lhs, rhs, truediv=True, *args, **kwargs):
+    def __init__(self, lhs, rhs, truediv, *args, **kwargs):
         super(Div, self).__init__('/', lhs, rhs, *args, **kwargs)
+
+        if not isnumeric(lhs.return_type) or not isnumeric(rhs.return_type):
+            raise TypeError("unsupported operand type(s) for {0}:"
+                            " '{1}' and '{2}'".format(self.op,
+                                                      lhs.return_type,
+                                                      rhs.return_type))
 
         if truediv or PY3:
             _cast_inplace(com.flatten(self), np.float_)

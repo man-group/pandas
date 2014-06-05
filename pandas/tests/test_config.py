@@ -170,26 +170,13 @@ class TestConfig(unittest.TestCase):
 
 
     def test_set_option_empty_args(self):
-        self.assertRaises(AssertionError, self.cf.set_option)
+        self.assertRaises(ValueError, self.cf.set_option)
 
     def test_set_option_uneven_args(self):
-        self.assertRaises(AssertionError, self.cf.set_option, 'a.b', 2, 'b.c')
-
-
-    def test_set_option_2_kwargs(self):
-        self.assertRaises(AssertionError, self.cf.set_option, 'a.b', 2,
-                          silenadf=2, asdf=2)
-
-    def test_set_option_invalid_kwargs_key(self):
-        self.assertRaises(ValueError, self.cf.set_option, 'a.b', 2,
-                          silenadf=2)
-
-    def test_set_option_invalid_kwargs_value_type(self):
-        self.assertRaises(TypeError, self.cf.set_option, 'a.b', 2,
-                          silent=2)
+        self.assertRaises(ValueError, self.cf.set_option, 'a.b', 2, 'b.c')
 
     def test_set_option_invalid_single_argument_type(self):
-        self.assertRaises(AssertionError, self.cf.set_option, 2)
+        self.assertRaises(ValueError, self.cf.set_option, 2)
 
     def test_set_option_multiple(self):
         self.cf.register_option('a', 1, 'doc')
@@ -263,7 +250,7 @@ class TestConfig(unittest.TestCase):
 
         # testing warning with catch_warning was only added in 2.6
         if sys.version_info[:2] < (2, 6):
-            raise nose.SkipTest()
+            raise nose.SkipTest("Need py > 2.6")
 
         self.assertTrue(self.cf._is_deprecated('foo'))
         with warnings.catch_warnings(record=True) as w:

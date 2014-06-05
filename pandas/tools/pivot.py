@@ -1,16 +1,21 @@
 # pylint: disable=E1103
 
+import warnings
+
 from pandas import Series, DataFrame
 from pandas.core.index import MultiIndex
+from pandas.core.groupby import Grouper
 from pandas.tools.merge import concat
 from pandas.tools.util import cartesian_product
 from pandas.compat import range, lrange, zip
+from pandas.util.decorators import deprecate_kwarg
 from pandas import compat
 import pandas.core.common as com
 import numpy as np
 
-
-def pivot_table(data, values=None, rows=None, cols=None, aggfunc='mean',
+@deprecate_kwarg(old_arg_name='cols', new_arg_name='columns')
+@deprecate_kwarg(old_arg_name='rows', new_arg_name='index')
+def pivot_table(data, values=None, index=None, columns=None, aggfunc='mean',
                 fill_value=None, margins=False, dropna=True):
     """
     Create a spreadsheet-style pivot table as a DataFrame. The levels in the
@@ -21,10 +26,12 @@ def pivot_table(data, values=None, rows=None, cols=None, aggfunc='mean',
     ----------
     data : DataFrame
     values : column to aggregate, optional
-    rows : list of column names or arrays to group on
-        Keys to group on the x-axis of the pivot table
-    cols : list of column names or arrays to group on
-        Keys to group on the y-axis of the pivot table
+    index : a column, Grouper, array which has the same length as data, or list of them.
+        Keys to group by on the pivot table index.
+        If an array is passed, it is being used as the same manner as column values.
+    columns : a column, Grouper, array which has the same length as data, or list of them.
+        Keys to group by on the pivot table column.
+        If an array is passed, it is being used as the same manner as column values.
     aggfunc : function, default numpy.mean, or list of functions
         If list of functions passed, the resulting pivot table will have
         hierarchical columns whose top level are the function names (inferred
@@ -35,6 +42,8 @@ def pivot_table(data, values=None, rows=None, cols=None, aggfunc='mean',
         Add all row / columns (e.g. for subtotal / grand totals)
     dropna : boolean, default True
         Do not include columns whose entries are all NaN
+    rows : kwarg only alias of index [deprecated]
+    cols : kwarg only alias of columns [deprecated]
 
     Examples
     --------
@@ -50,8 +59,8 @@ def pivot_table(data, values=None, rows=None, cols=None, aggfunc='mean',
     7  bar two small  6
     8  bar two large  7
 
-    >>> table = pivot_table(df, values='D', rows=['A', 'B'],
-    ...                     cols=['C'], aggfunc=np.sum)
+    >>> table = pivot_table(df, values='D', index=['A', 'B'],
+    ...                     columns=['C'], aggfunc=np.sum)
     >>> table
               small  large
     foo  one  1      4
@@ -63,21 +72,21 @@ def pivot_table(data, values=None, rows=None, cols=None, aggfunc='mean',
     -------
     table : DataFrame
     """
-    rows = _convert_by(rows)
-    cols = _convert_by(cols)
+    index = _convert_by(index)
+    columns = _convert_by(columns)
 
     if isinstance(aggfunc, list):
         pieces = []
         keys = []
         for func in aggfunc:
-            table = pivot_table(data, values=values, rows=rows, cols=cols,
+            table = pivot_table(data, values=values, index=index, columns=columns,
                                 fill_value=fill_value, aggfunc=func,
                                 margins=margins)
             pieces.append(table)
             keys.append(func.__name__)
         return concat(pieces, keys=keys, axis=1)
 
-    keys = rows + cols
+    keys = index + columns
 
     values_passed = values is not None
     if values_passed:
@@ -92,6 +101,8 @@ def pivot_table(data, values=None, rows=None, cols=None, aggfunc='mean',
     if values_passed:
         to_filter = []
         for x in keys + values:
+            if isinstance(x, Grouper):
+                x = x.key
             try:
                 if x in data:
                     to_filter.append(x)
@@ -106,7 +117,7 @@ def pivot_table(data, values=None, rows=None, cols=None, aggfunc='mean',
     table = agged
     if table.index.nlevels > 1:
         to_unstack = [agged.index.names[i]
-                      for i in range(len(rows), len(keys))]
+                      for i in range(len(index), len(keys))]
         table = agged.unstack(to_unstack)
 
     if not dropna:
@@ -132,14 +143,14 @@ def pivot_table(data, values=None, rows=None, cols=None, aggfunc='mean',
         table = table.fillna(value=fill_value, downcast='infer')
 
     if margins:
-        table = _add_margins(table, data, values, rows=rows,
-                             cols=cols, aggfunc=aggfunc)
+        table = _add_margins(table, data, values, rows=index,
+                             cols=columns, aggfunc=aggfunc)
 
     # discard the top level
     if values_passed and not values_multi:
         table = table[values[0]]
 
-    if len(rows) == 0 and len(cols) > 0:
+    if len(index) == 0 and len(columns) > 0:
         table = table.T
 
     return table
@@ -291,15 +302,16 @@ def _generate_marginal_results_without_values(table, data, rows, cols, aggfunc):
 def _convert_by(by):
     if by is None:
         by = []
-    elif (np.isscalar(by) or isinstance(by, (np.ndarray, Series))
+    elif (np.isscalar(by) or isinstance(by, (np.ndarray, Series, Grouper))
           or hasattr(by, '__call__')):
         by = [by]
     else:
         by = list(by)
     return by
 
-
-def crosstab(rows, cols, values=None, rownames=None, colnames=None,
+@deprecate_kwarg(old_arg_name='cols', new_arg_name='columns')
+@deprecate_kwarg(old_arg_name='rows', new_arg_name='index')
+def crosstab(index, columns, values=None, rownames=None, colnames=None,
              aggfunc=None, margins=False, dropna=True):
     """
     Compute a simple cross-tabulation of two (or more) factors. By default
@@ -308,9 +320,9 @@ def crosstab(rows, cols, values=None, rownames=None, colnames=None,
 
     Parameters
     ----------
-    rows : array-like, Series, or list of arrays/Series
+    index : array-like, Series, or list of arrays/Series
         Values to group by in the rows
-    cols : array-like, Series, or list of arrays/Series
+    columns : array-like, Series, or list of arrays/Series
         Values to group by in the columns
     values : array-like, optional
         Array of values to aggregate according to the factors
@@ -324,6 +336,8 @@ def crosstab(rows, cols, values=None, rownames=None, colnames=None,
         Add row/column margins (subtotals)
     dropna : boolean, default True
         Do not include columns whose entries are all NaN
+    rows : kwarg only alias of index [deprecated]
+    cols : kwarg only alias of columns [deprecated]
 
     Notes
     -----
@@ -353,26 +367,27 @@ def crosstab(rows, cols, values=None, rownames=None, colnames=None,
     -------
     crosstab : DataFrame
     """
-    rows = com._maybe_make_list(rows)
-    cols = com._maybe_make_list(cols)
 
-    rownames = _get_names(rows, rownames, prefix='row')
-    colnames = _get_names(cols, colnames, prefix='col')
+    index = com._maybe_make_list(index)
+    columns = com._maybe_make_list(columns)
+
+    rownames = _get_names(index, rownames, prefix='row')
+    colnames = _get_names(columns, colnames, prefix='col')
 
     data = {}
-    data.update(zip(rownames, rows))
-    data.update(zip(colnames, cols))
+    data.update(zip(rownames, index))
+    data.update(zip(colnames, columns))
 
     if values is None:
         df = DataFrame(data)
         df['__dummy__'] = 0
-        table = df.pivot_table('__dummy__', rows=rownames, cols=colnames,
+        table = df.pivot_table('__dummy__', index=rownames, columns=colnames,
                                aggfunc=len, margins=margins, dropna=dropna)
         return table.fillna(0).astype(np.int64)
     else:
         data['__dummy__'] = values
         df = DataFrame(data)
-        table = df.pivot_table('__dummy__', rows=rownames, cols=colnames,
+        table = df.pivot_table('__dummy__', index=rownames, columns=colnames,
                                aggfunc=aggfunc, margins=margins, dropna=dropna)
         return table
 

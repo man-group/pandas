@@ -63,8 +63,8 @@ class TestResample(tm.TestCase):
         for f in funcs:
             g._cython_agg_general(f)
 
-        self.assertEquals(g.ngroups, 2593)
-        self.assert_(notnull(g.mean()).all())
+        self.assertEqual(g.ngroups, 2593)
+        self.assertTrue(notnull(g.mean()).all())
 
         # construct expected val
         arr = [1] + [5] * 2592
@@ -79,8 +79,8 @@ class TestResample(tm.TestCase):
         df = DataFrame(np.random.rand(len(dti), 10), index=dti, dtype='float64')
         r = df.groupby(b).agg(np.sum)
 
-        self.assertEquals(len(r.columns), 10)
-        self.assertEquals(len(r.index), 2593)
+        self.assertEqual(len(r.columns), 10)
+        self.assertEqual(len(r.index), 2593)
 
     def test_resample_basic(self):
         rng = date_range('1/1/2000 00:00:00', '1/1/2000 00:13:00', freq='min',
@@ -90,7 +90,7 @@ class TestResample(tm.TestCase):
         expected = Series([s[0], s[1:6].mean(), s[6:11].mean(), s[11:].mean()],
                           index=date_range('1/1/2000', periods=4, freq='5min'))
         assert_series_equal(result, expected)
-        self.assert_(result.index.name == 'index')
+        self.assertEqual(result.index.name, 'index')
 
         result = s.resample('5min', how='mean', closed='left', label='right')
         expected = Series([s[:5].mean(), s[5:10].mean(), s[10:].mean()],
@@ -115,50 +115,76 @@ class TestResample(tm.TestCase):
         # to weekly
         result = s.resample('w-sun', how='last')
 
-        self.assertEquals(len(result), 3)
-        self.assert_((result.index.dayofweek == [6, 6, 6]).all())
-        self.assertEquals(result.irow(0), s['1/2/2005'])
-        self.assertEquals(result.irow(1), s['1/9/2005'])
-        self.assertEquals(result.irow(2), s.irow(-1))
+        self.assertEqual(len(result), 3)
+        self.assertTrue((result.index.dayofweek == [6, 6, 6]).all())
+        self.assertEqual(result.irow(0), s['1/2/2005'])
+        self.assertEqual(result.irow(1), s['1/9/2005'])
+        self.assertEqual(result.irow(2), s.irow(-1))
 
         result = s.resample('W-MON', how='last')
-        self.assertEquals(len(result), 2)
-        self.assert_((result.index.dayofweek == [0, 0]).all())
-        self.assertEquals(result.irow(0), s['1/3/2005'])
-        self.assertEquals(result.irow(1), s['1/10/2005'])
+        self.assertEqual(len(result), 2)
+        self.assertTrue((result.index.dayofweek == [0, 0]).all())
+        self.assertEqual(result.irow(0), s['1/3/2005'])
+        self.assertEqual(result.irow(1), s['1/10/2005'])
 
         result = s.resample('W-TUE', how='last')
-        self.assertEquals(len(result), 2)
-        self.assert_((result.index.dayofweek == [1, 1]).all())
-        self.assertEquals(result.irow(0), s['1/4/2005'])
-        self.assertEquals(result.irow(1), s['1/10/2005'])
+        self.assertEqual(len(result), 2)
+        self.assertTrue((result.index.dayofweek == [1, 1]).all())
+        self.assertEqual(result.irow(0), s['1/4/2005'])
+        self.assertEqual(result.irow(1), s['1/10/2005'])
 
         result = s.resample('W-WED', how='last')
-        self.assertEquals(len(result), 2)
-        self.assert_((result.index.dayofweek == [2, 2]).all())
-        self.assertEquals(result.irow(0), s['1/5/2005'])
-        self.assertEquals(result.irow(1), s['1/10/2005'])
+        self.assertEqual(len(result), 2)
+        self.assertTrue((result.index.dayofweek == [2, 2]).all())
+        self.assertEqual(result.irow(0), s['1/5/2005'])
+        self.assertEqual(result.irow(1), s['1/10/2005'])
 
         result = s.resample('W-THU', how='last')
-        self.assertEquals(len(result), 2)
-        self.assert_((result.index.dayofweek == [3, 3]).all())
-        self.assertEquals(result.irow(0), s['1/6/2005'])
-        self.assertEquals(result.irow(1), s['1/10/2005'])
+        self.assertEqual(len(result), 2)
+        self.assertTrue((result.index.dayofweek == [3, 3]).all())
+        self.assertEqual(result.irow(0), s['1/6/2005'])
+        self.assertEqual(result.irow(1), s['1/10/2005'])
 
         result = s.resample('W-FRI', how='last')
-        self.assertEquals(len(result), 2)
-        self.assert_((result.index.dayofweek == [4, 4]).all())
-        self.assertEquals(result.irow(0), s['1/7/2005'])
-        self.assertEquals(result.irow(1), s['1/10/2005'])
+        self.assertEqual(len(result), 2)
+        self.assertTrue((result.index.dayofweek == [4, 4]).all())
+        self.assertEqual(result.irow(0), s['1/7/2005'])
+        self.assertEqual(result.irow(1), s['1/10/2005'])
 
         # to biz day
         result = s.resample('B', how='last')
-        self.assertEquals(len(result), 7)
-        self.assert_((result.index.dayofweek == [4, 0, 1, 2, 3, 4, 0]).all())
-        self.assertEquals(result.irow(0), s['1/2/2005'])
-        self.assertEquals(result.irow(1), s['1/3/2005'])
-        self.assertEquals(result.irow(5), s['1/9/2005'])
-        self.assert_(result.index.name == 'index')
+        self.assertEqual(len(result), 7)
+        self.assertTrue((result.index.dayofweek == [4, 0, 1, 2, 3, 4, 0]).all())
+        self.assertEqual(result.irow(0), s['1/2/2005'])
+        self.assertEqual(result.irow(1), s['1/3/2005'])
+        self.assertEqual(result.irow(5), s['1/9/2005'])
+        self.assertEqual(result.index.name, 'index')
+
+    def test_resample_upsampling_picked_but_not_correct(self):
+
+        # Test for issue #3020
+        dates = date_range('01-Jan-2014','05-Jan-2014', freq='D')
+        series = Series(1, index=dates)
+
+        result = series.resample('D')
+        self.assertEqual(result.index[0], dates[0])
+
+        # GH 5955
+        # incorrect deciding to upsample when the axis frequency matches the resample frequency
+
+        import datetime
+        s = Series(np.arange(1.,6),index=[datetime.datetime(1975, 1, i, 12, 0) for i in range(1, 6)])
+        expected = Series(np.arange(1.,6),index=date_range('19750101',periods=5,freq='D'))
+
+        result = s.resample('D',how='count')
+        assert_series_equal(result,Series(1,index=expected.index))
+
+        result1 = s.resample('D',how='sum')
+        result2 = s.resample('D',how='mean')
+        result3 = s.resample('D')
+        assert_series_equal(result1,expected)
+        assert_series_equal(result2,expected)
+        assert_series_equal(result3,expected)
 
     def test_resample_frame_basic(self):
         df = tm.makeTimeDataFrame()
@@ -201,7 +227,7 @@ class TestResample(tm.TestCase):
             loffset=Minute(1))
         assert_series_equal(result, expected)
 
-        self.assert_(result.index.freq == Minute(5))
+        self.assertEqual(result.index.freq, Minute(5))
 
                 # from daily
         dti = DatetimeIndex(
@@ -224,11 +250,11 @@ class TestResample(tm.TestCase):
 
         # to minutely, by padding
         result = s.resample('Min', fill_method='pad')
-        self.assertEquals(len(result), 12961)
-        self.assertEquals(result[0], s[0])
-        self.assertEquals(result[-1], s[-1])
+        self.assertEqual(len(result), 12961)
+        self.assertEqual(result[0], s[0])
+        self.assertEqual(result[-1], s[-1])
 
-        self.assert_(result.index.name == 'index')
+        self.assertEqual(result.index.name, 'index')
 
     def test_upsample_with_limit(self):
         rng = date_range('1/1/2000', periods=3, freq='5t')
@@ -245,20 +271,20 @@ class TestResample(tm.TestCase):
         expect = s.groupby(grouper).agg(lambda x: x[-1])
         result = s.resample('5Min', how='ohlc')
 
-        self.assertEquals(len(result), len(expect))
-        self.assertEquals(len(result.columns), 4)
+        self.assertEqual(len(result), len(expect))
+        self.assertEqual(len(result.columns), 4)
 
         xs = result.irow(-2)
-        self.assertEquals(xs['open'], s[-6])
-        self.assertEquals(xs['high'], s[-6:-1].max())
-        self.assertEquals(xs['low'], s[-6:-1].min())
-        self.assertEquals(xs['close'], s[-2])
+        self.assertEqual(xs['open'], s[-6])
+        self.assertEqual(xs['high'], s[-6:-1].max())
+        self.assertEqual(xs['low'], s[-6:-1].min())
+        self.assertEqual(xs['close'], s[-2])
 
         xs = result.irow(0)
-        self.assertEquals(xs['open'], s[0])
-        self.assertEquals(xs['high'], s[:5].max())
-        self.assertEquals(xs['low'], s[:5].min())
-        self.assertEquals(xs['close'], s[4])
+        self.assertEqual(xs['open'], s[0])
+        self.assertEqual(xs['high'], s[:5].max())
+        self.assertEqual(xs['low'], s[:5].min())
+        self.assertEqual(xs['close'], s[4])
 
     def test_resample_ohlc_dataframe(self):
         df = (pd.DataFrame({'PRICE': {Timestamp('2011-01-06 10:59:05', tz=None): 24990,
@@ -303,9 +329,9 @@ class TestResample(tm.TestCase):
         s = Series(np.random.rand(len(dti)), dti)
         bs = s.resample('B', closed='right', label='right')
         result = bs.resample('8H')
-        self.assertEquals(len(result), 22)
+        self.assertEqual(len(result), 22)
         tm.assert_isinstance(result.index.freq, offsets.DateOffset)
-        self.assert_(result.index.freq == offsets.Hour(8))
+        self.assertEqual(result.index.freq, offsets.Hour(8))
 
     def test_resample_timestamp_to_period(self):
         ts = _simple_ts('1/1/1990', '1/1/2000')
@@ -343,13 +369,13 @@ class TestResample(tm.TestCase):
         resampled = ts.resample('5min', how='ohlc', closed='right',
                                 label='right')
 
-        self.assert_((resampled.ix['1/1/2000 00:00'] == ts[0]).all())
+        self.assertTrue((resampled.ix['1/1/2000 00:00'] == ts[0]).all())
 
         exp = _ohlc(ts[1:31])
-        self.assert_((resampled.ix['1/1/2000 00:05'] == exp).all())
+        self.assertTrue((resampled.ix['1/1/2000 00:05'] == exp).all())
 
         exp = _ohlc(ts['1/1/2000 5:55:01':])
-        self.assert_((resampled.ix['1/1/2000 6:00:00'] == exp).all())
+        self.assertTrue((resampled.ix['1/1/2000 6:00:00'] == exp).all())
 
     def test_downsample_non_unique(self):
         rng = date_range('1/1/2000', '2/29/2000')
@@ -359,7 +385,7 @@ class TestResample(tm.TestCase):
         result = ts.resample('M', how='mean')
 
         expected = ts.groupby(lambda x: x.month).mean()
-        self.assertEquals(len(result), 2)
+        self.assertEqual(len(result), 2)
         assert_almost_equal(result[0], expected[1])
         assert_almost_equal(result[1], expected[2])
 
@@ -466,7 +492,7 @@ class TestResample(tm.TestCase):
         resampled = ts.resample('5min', base=2)
         exp_rng = date_range('12/31/1999 23:57:00', '1/1/2000 01:57',
                              freq='5min')
-        self.assert_(resampled.index.equals(exp_rng))
+        self.assertTrue(resampled.index.equals(exp_rng))
 
     def test_resample_daily_anchored(self):
         rng = date_range('1/1/2000 0:00:00', periods=10000, freq='T')
@@ -485,18 +511,18 @@ class TestResample(tm.TestCase):
 
         result = ts.resample('M', kind='period')
         exp_index = period_range('Jan-2000', 'Dec-2000', freq='M')
-        self.assert_(result.index.equals(exp_index))
+        self.assertTrue(result.index.equals(exp_index))
 
     def test_resample_empty(self):
         ts = _simple_ts('1/1/2000', '2/1/2000')[:0]
 
         result = ts.resample('A')
-        self.assert_(len(result) == 0)
-        self.assert_(result.index.freqstr == 'A-DEC')
+        self.assertEqual(len(result), 0)
+        self.assertEqual(result.index.freqstr, 'A-DEC')
 
         result = ts.resample('A', kind='period')
-        self.assert_(len(result) == 0)
-        self.assert_(result.index.freqstr == 'A-DEC')
+        self.assertEqual(len(result), 0)
+        self.assertEqual(result.index.freqstr, 'A-DEC')
 
         xp = DataFrame()
         rs = xp.resample('A')
@@ -549,7 +575,7 @@ class TestResample(tm.TestCase):
 
         ts = _simple_ts('2012-04-29 23:00', '2012-04-30 5:00', freq='h')
         resampled = ts.resample('M')
-        self.assert_(len(resampled) == 1)
+        self.assertEqual(len(resampled), 1)
 
     def test_resample_anchored_monthstart(self):
         ts = _simple_ts('1/1/2000', '12/31/2002')
@@ -567,18 +593,18 @@ class TestResample(tm.TestCase):
 
         result = ts.resample('5t', closed='right', label='left')
         ex_index = date_range('1999-12-31 23:55', periods=4, freq='5t')
-        self.assert_(result.index.equals(ex_index))
+        self.assertTrue(result.index.equals(ex_index))
 
         len0pts = _simple_pts('2007-01', '2010-05', freq='M')[:0]
         # it works
         result = len0pts.resample('A-DEC')
-        self.assert_(len(result) == 0)
+        self.assertEqual(len(result), 0)
 
         # resample to periods
         ts = _simple_ts('2000-04-28', '2000-04-30 11:00', freq='h')
         result = ts.resample('M', kind='period')
-        self.assert_(len(result) == 1)
-        self.assert_(result.index[0] == Period('2000-04', freq='M'))
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result.index[0], Period('2000-04', freq='M'))
 
     def test_anchored_lowercase_buglet(self):
         dates = date_range('4/16/2012 20:00', periods=50000, freq='s')
@@ -649,6 +675,54 @@ class TestResample(tm.TestCase):
 
         # it works!
         df.resample('AS', 'sum')
+
+    def test_resample_consistency(self):
+
+        # GH 6418
+        # resample with bfill / limit / reindex consistency
+
+        i30 = index=pd.date_range('2002-02-02', periods=4, freq='30T')
+        s=pd.Series(np.arange(4.), index=i30)
+        s[2] = np.NaN
+
+        # Upsample by factor 3 with reindex() and resample() methods:
+        i10 = pd.date_range(i30[0], i30[-1], freq='10T')
+
+        s10 = s.reindex(index=i10, method='bfill')
+        s10_2 = s.reindex(index=i10, method='bfill', limit=2)
+        rl = s.reindex_like(s10, method='bfill', limit=2)
+        r10_2 = s.resample('10Min', fill_method='bfill', limit=2)
+        r10 = s.resample('10Min', fill_method='bfill')
+
+        # s10_2, r10, r10_2, rl should all be equal
+        assert_series_equal(s10_2, r10)
+        assert_series_equal(s10_2, r10_2)
+        assert_series_equal(s10_2, rl)
+
+    def test_resample_timegrouper(self):
+        # GH 7227
+        dates = [datetime(2014, 10, 1), datetime(2014, 9, 3),
+                  datetime(2014, 11, 5), datetime(2014, 9, 5),
+                  datetime(2014, 10, 8), datetime(2014, 7, 15)]
+
+        df = DataFrame(dict(A=dates, B=np.arange(len(dates))))
+        result = df.set_index('A').resample('M', how='count')
+        exp_idx = pd.DatetimeIndex(['2014-07-31', '2014-08-31', '2014-09-30',
+                                    '2014-10-31', '2014-11-30'], freq='M', name='A')
+        expected = DataFrame({'B': [1, 0, 2, 2, 1]}, index=exp_idx)
+        assert_frame_equal(result, expected)
+
+        result = df.groupby(pd.Grouper(freq='M', key='A')).count()
+        assert_frame_equal(result, expected)
+
+        df = DataFrame(dict(A=dates, B=np.arange(len(dates)), C=np.arange(len(dates))))
+        result = df.set_index('A').resample('M', how='count')
+        expected = DataFrame({'B': [1, 0, 2, 2, 1], 'C': [1, 0, 2, 2, 1]},
+                             index=exp_idx, columns=['B', 'C'])
+        assert_frame_equal(result, expected)
+
+        result = df.groupby(pd.Grouper(freq='M', key='A')).count()
+        assert_frame_equal(result, expected)
 
 
 def _simple_ts(start, end, freq='D'):
@@ -795,6 +869,14 @@ class TestResamplePeriodIndex(tm.TestCase):
             expected = expected.asfreq(targ, 'ffill').to_period()
             assert_series_equal(result, expected)
 
+    def test_fill_method_and_how_upsample(self):
+        # GH2073
+        s = Series(np.arange(9,dtype='int64'),
+                   index=date_range('2010-01-01', periods=9, freq='Q'))
+        last = s.resample('M', fill_method='ffill')
+        both = s.resample('M', how='last', fill_method='ffill').astype('int64')
+        assert_series_equal(last, both)
+
     def test_weekly_upsample(self):
         targets = ['D', 'B']
 
@@ -889,7 +971,7 @@ class TestResamplePeriodIndex(tm.TestCase):
         ts = _simple_pts('1/1/2000', '2/1/2000')[:0]
 
         result = ts.resample('A')
-        self.assert_(len(result) == 0)
+        self.assertEqual(len(result), 0)
 
     def test_resample_irregular_sparse(self):
         dr = date_range(start='1/1/2012', freq='5min', periods=1000)
@@ -907,7 +989,7 @@ class TestResamplePeriodIndex(tm.TestCase):
 
         result = ts.resample('W-THU')
 
-        self.assert_(result.isnull().all())
+        self.assertTrue(result.isnull().all())
 
         result = ts.resample('W-THU', fill_method='ffill')[:-1]
         expected = ts.asfreq('W-THU', method='ffill')
@@ -951,6 +1033,18 @@ class TestResamplePeriodIndex(tm.TestCase):
         expected = Series([1.5], index=ex_index)
         assert_series_equal(result, expected)
 
+        # GH 6397
+        # comparing an offset that doesn't propogate tz's
+        rng = date_range('1/1/2011', periods=20000, freq='H')
+        rng = rng.tz_localize('EST')
+        ts = DataFrame(index=rng)
+        ts['first']=np.random.randn(len(rng))
+        ts['second']=np.cumsum(np.random.randn(len(rng)))
+        expected = DataFrame({ 'first' : ts.resample('A',how=np.sum)['first'],
+                               'second' : ts.resample('A',how=np.mean)['second'] },columns=['first','second'])
+        result = ts.resample('A', how={'first':np.sum, 'second':np.mean}).reindex(columns=['first','second'])
+        assert_frame_equal(result,expected)
+
     def test_closed_left_corner(self):
         # #1465
         s = Series(np.random.randn(21),
@@ -967,7 +1061,7 @@ class TestResamplePeriodIndex(tm.TestCase):
 
         ex_index = date_range(start='1/1/2012 9:30', freq='10min', periods=3)
 
-        self.assert_(result.index.equals(ex_index))
+        self.assertTrue(result.index.equals(ex_index))
         assert_series_equal(result, exp)
 
     def test_quarterly_resampling(self):
@@ -1044,15 +1138,38 @@ class TestResamplePeriodIndex(tm.TestCase):
         result = s.resample("A", how='mean')
         tm.assert_almost_equal(result[0], s.mean())
 
-    def test_resample_doesnt_truncate(self):
-        """Test for issue #3020"""
-        import pandas as pd
-        dates = pd.date_range('01-Jan-2014','05-Jan-2014', freq='D')
-        series = Series(1, index=dates)
+    def test_evenly_divisible_with_no_extra_bins(self):
+        # 4076
+        # when the frequency is evenly divisible, sometimes extra bins
 
-        result = series.resample('D')
-        self.assertEquals(result.index[0], dates[0])
+        df = DataFrame(np.random.randn(9, 3), index=date_range('2000-1-1', periods=9))
+        result = df.resample('5D')
+        expected = pd.concat([df.iloc[0:5].mean(),df.iloc[5:].mean()],axis=1).T
+        expected.index = [Timestamp('2000-1-1'),Timestamp('2000-1-6')]
+        assert_frame_equal(result,expected)
 
+        index = date_range(start='2001-5-4', periods=28)
+        df = DataFrame(
+            [{'REST_KEY': 1, 'DLY_TRN_QT': 80, 'DLY_SLS_AMT': 90,
+              'COOP_DLY_TRN_QT': 30, 'COOP_DLY_SLS_AMT': 20}] * 28 +
+            [{'REST_KEY': 2, 'DLY_TRN_QT': 70, 'DLY_SLS_AMT': 10,
+              'COOP_DLY_TRN_QT': 50, 'COOP_DLY_SLS_AMT': 20}] * 28,
+            index=index.append(index)).sort()
+
+        index = date_range('2001-5-4',periods=4,freq='7D')
+        expected = DataFrame(
+            [{'REST_KEY': 14, 'DLY_TRN_QT': 14, 'DLY_SLS_AMT': 14,
+              'COOP_DLY_TRN_QT': 14, 'COOP_DLY_SLS_AMT': 14}] * 4,
+            index=index)
+        result = df.resample('7D', how='count')
+        assert_frame_equal(result,expected)
+
+        expected = DataFrame(
+            [{'REST_KEY': 21, 'DLY_TRN_QT': 1050, 'DLY_SLS_AMT': 700,
+              'COOP_DLY_TRN_QT': 560, 'COOP_DLY_SLS_AMT': 280}] * 4,
+            index=index)
+        result = df.resample('7D', how='sum')
+        assert_frame_equal(result,expected)
 
 class TestTimeGrouper(tm.TestCase):
 
@@ -1100,10 +1217,9 @@ class TestTimeGrouper(tm.TestCase):
         df = DataFrame({'open': 1, 'close': 2}, index=ind)
         tg = TimeGrouper('M')
 
-        grouper = tg.get_grouper(df)
+        _, grouper, _ = tg._get_grouper(df)
 
         # Errors
-
         grouped = df.groupby(grouper, group_keys=False)
         f = lambda df: df['close'] / df['open']
 
@@ -1118,7 +1234,7 @@ class TestTimeGrouper(tm.TestCase):
                       minor_axis=['A', 'B', 'C', 'D'])
 
         tg = TimeGrouper('M', axis=1)
-        grouper = tg.get_grouper(wp)
+        _, grouper, _ = tg._get_grouper(wp)
         bingrouped = wp.groupby(grouper)
         binagg = bingrouped.mean()
 

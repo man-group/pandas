@@ -22,7 +22,7 @@
 
 
 ********************
-10 Minutes to Pandas
+10 Minutes to pandas
 ********************
 
 This is a short introduction to pandas, geared mainly for new users.
@@ -83,7 +83,6 @@ will be completed:
 
    @verbatim
    In [1]: df2.<TAB>
-
    df2.A                  df2.boxplot
    df2.abs                df2.C
    df2.add                df2.clip
@@ -273,25 +272,6 @@ For getting fast access to a scalar (equiv to the prior method)
 
    df.iat[1,1]
 
-There is one signficant departure from standard python/numpy slicing semantics.
-python/numpy allow slicing past the end of an array without an associated
-error.
-
-.. ipython:: python
-
-    # these are allowed in python/numpy.
-    x = list('abcdef')
-    x[4:10]
-    x[8:10]
-
-Pandas will detect this and raise ``IndexError``, rather than return an empty
-structure.
-
-::
-
-    >>> df.iloc[:,8:10]
-    IndexError: out-of-bounds on slice (end)
-
 Boolean Indexing
 ~~~~~~~~~~~~~~~~
 
@@ -306,6 +286,15 @@ A ``where`` operation for getting.
 .. ipython:: python
 
    df[df > 0]
+
+Using the :func:`~Series.isin` method for filtering:
+
+.. ipython:: python
+
+   df2 = df.copy()
+   df2['E']=['one', 'one','two','three','four','three']
+   df2
+   df2[df2['E'].isin(['two','four'])]
 
 Setting
 ~~~~~~~
@@ -355,7 +344,7 @@ A ``where`` operation with setting.
 Missing Data
 ------------
 
-Pandas primarily uses the value ``np.nan`` to represent missing data. It is by
+pandas primarily uses the value ``np.nan`` to represent missing data. It is by
 default not included in computations. See the :ref:`Missing Data section
 <missing_data>`
 
@@ -456,7 +445,7 @@ Merge
 Concat
 ~~~~~~
 
-Pandas provides various facilities for easily combining together Series,
+pandas provides various facilities for easily combining together Series,
 DataFrame, and Panel objects with various kinds of set logic for the indexes
 and relational algebra functionality in the case of join / merge-type
 operations.
@@ -590,13 +579,13 @@ We can produce pivot tables from this data very easily:
 
 .. ipython:: python
 
-   pd.pivot_table(df, values='D', rows=['A', 'B'], cols=['C'])
+   pd.pivot_table(df, values='D', index=['A', 'B'], columns=['C'])
 
 
 Time Series
 -----------
 
-Pandas has simple, powerful, and efficient functionality for performing
+pandas has simple, powerful, and efficient functionality for performing
 resampling operations during frequency conversion (e.g., converting secondly
 data into 5-minutely data). This is extremely common in, but not limited to,
 financial applications. See the :ref:`Time Series section <timeseries>`

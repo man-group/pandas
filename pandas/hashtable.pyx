@@ -66,11 +66,12 @@ cdef class ObjectVector:
 
     def to_array(self):
         self.ao.resize(self.n)
+        self.m = self.n
         return self.ao
 
     cdef inline append(self, object o):
         if self.n == self.m:
-            self.m = self.m * 2
+            self.m = max(self.m * 2, _INIT_VEC_CAP)
             self.ao.resize(self.m)
             self.data = <PyObject**> self.ao.data
 
@@ -97,11 +98,12 @@ cdef class Int64Vector:
 
     def to_array(self):
         self.ao.resize(self.n)
+        self.m = self.n
         return self.ao
 
     cdef inline append(self, int64_t x):
         if self.n == self.m:
-            self.m = self.m * 2
+            self.m = max(self.m * 2, _INIT_VEC_CAP)
             self.ao.resize(self.m)
             self.data = <int64_t*> self.ao.data
 
@@ -126,11 +128,12 @@ cdef class Float64Vector:
 
     def to_array(self):
         self.ao.resize(self.n)
+        self.m = self.n
         return self.ao
 
     cdef inline append(self, float64_t x):
         if self.n == self.m:
-            self.m = self.m * 2
+            self.m = max(self.m * 2, _INIT_VEC_CAP)
             self.ao.resize(self.m)
             self.data = <float64_t*> self.ao.data
 
@@ -144,10 +147,6 @@ cdef class HashTable:
 
 cdef class StringHashTable(HashTable):
     cdef kh_str_t *table
-
-    # def __init__(self, size_hint=1):
-    #     if size_hint is not None:
-    #         kh_resize_str(self.table, size_hint)
 
     def __cinit__(self, int size_hint=1):
         self.table = kh_init_str()
@@ -539,8 +538,6 @@ cdef class Int64HashTable: #(HashTable):
 
 
 cdef class Float64HashTable(HashTable):
-    # cdef kh_float64_t *table
-
     def __cinit__(self, size_hint=1):
         self.table = kh_init_float64()
         if size_hint is not None:
@@ -549,8 +546,33 @@ cdef class Float64HashTable(HashTable):
     def __len__(self):
         return self.table.size
 
+    cpdef get_item(self, float64_t val):
+        cdef khiter_t k
+        k = kh_get_float64(self.table, val)
+        if k != self.table.n_buckets:
+            return self.table.vals[k]
+        else:
+            raise KeyError(val)
+
+    cpdef set_item(self, float64_t key, Py_ssize_t val):
+        cdef:
+            khiter_t k
+            int ret = 0
+
+        k = kh_put_float64(self.table, key, &ret)
+        self.table.keys[k] = key
+        if kh_exist_float64(self.table, k):
+            self.table.vals[k] = val
+        else:
+            raise KeyError(key)
+
     def __dealloc__(self):
         kh_destroy_float64(self.table)
+
+    def __contains__(self, object key):
+        cdef khiter_t k
+        k = kh_get_float64(self.table, key)
+        return k != self.table.n_buckets
 
     def factorize(self, ndarray[float64_t] values):
         uniques = Float64Vector()
@@ -835,20 +857,23 @@ cdef class Factorizer:
         return self.count
 
     def factorize(self, ndarray[object] values, sort=False, na_sentinel=-1):
+        """
+        Factorize values with nans replaced by na_sentinel
+        >>> factorize(np.array([1,2,np.nan], dtype='O'), na_sentinel=20)
+        array([ 0,  1, 20])
+        """
         labels = self.table.get_labels(values, self.uniques,
                                        self.count, na_sentinel)
-
+        mask = (labels == na_sentinel)
         # sort on
         if sort:
             if labels.dtype != np.int_:
                 labels = labels.astype(np.int_)
-
             sorter = self.uniques.to_array().argsort()
             reverse_indexer = np.empty(len(sorter), dtype=np.int_)
             reverse_indexer.put(sorter, np.arange(len(sorter)))
-
-            labels = reverse_indexer.take(labels)
-
+            labels = reverse_indexer.take(labels, mode='clip')
+            labels[mask] = na_sentinel
         self.count = len(self.uniques)
         return labels
 

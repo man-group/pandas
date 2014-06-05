@@ -19,13 +19,16 @@ apt-get update
 
 # install some deps and virtualenv
 apt-get install python-pip libfreetype6-dev libpng12-dev libhdf5-serial-dev \
-    g++ libatlas-base-dev gfortran -y
+    g++ libatlas-base-dev gfortran libreadline-dev zlib1g-dev flex bison \
+    libxml2-dev libxslt-dev libssl-dev -y
 pip install virtualenv
 apt-get build-dep python-lxml -y
 
+# install sql servers
+apt-get install postgresql-client libpq-dev -y
+
 export PYTHONIOENCODING='utf-8'
 export VIRTUALENV_DISTRIBUTE=0
-
 
 function create_fake_pandas() {
     local site_pkg_dir="$1"
@@ -102,6 +105,12 @@ function generate_wheels() {
     done
 }
 
+
+# generate a single wheel version
+# generate_wheels "/reqf/requirements-2.7.txt"
+# 
+# if vagrant is already up
+# run as vagrant provision
 
 for reqfile in $(ls -1 /reqf/requirements-*.*); do
     generate_wheels "$reqfile"

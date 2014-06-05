@@ -2,7 +2,6 @@
 from numpy cimport *
 import numpy as np
 
-from pandas.core.array import SNDArray
 from distutils.version import LooseVersion
 
 is_numpy_prior_1_6_2 = LooseVersion(np.__version__) < '1.6.2'
@@ -35,18 +34,15 @@ cdef class Reducer:
             self.chunksize = k
             self.increment = k * arr.dtype.itemsize
 
+
         self.f = f
         self.arr = arr
         self.typ = None
         self.labels = labels
-        self.dummy, index = self._check_dummy(dummy)
+        self.dummy, index = self._check_dummy(dummy=dummy)
 
-        if axis == 0:
-             self.labels = index
-             self.index  = labels
-        else:
-             self.labels = labels
-             self.index  = index
+        self.labels = labels
+        self.index  = index
 
     def _check_dummy(self, dummy=None):
         cdef object index
@@ -54,19 +50,23 @@ cdef class Reducer:
         if dummy is None:
             dummy = np.empty(self.chunksize, dtype=self.arr.dtype)
             index = None
-        else:
-            if dummy.dtype != self.arr.dtype:
-                raise ValueError('Dummy array must be same dtype')
-            if len(dummy) != self.chunksize:
-                raise ValueError('Dummy array must be length %d' %
-                                 self.chunksize)
 
+            # our ref is stolen later since we are creating this array
+            # in cython, so increment first
+            Py_INCREF(dummy)
+        else:
             # we passed a series-like
             if hasattr(dummy,'values'):
 
                 self.typ = type(dummy)
                 index = getattr(dummy,'index',None)
                 dummy = dummy.values
+
+            if dummy.dtype != self.arr.dtype:
+                raise ValueError('Dummy array must be same dtype')
+            if len(dummy) != self.chunksize:
+                raise ValueError('Dummy array must be length %d' %
+                                 self.chunksize)
 
         return dummy, index
 
@@ -76,7 +76,8 @@ cdef class Reducer:
             ndarray arr, result, chunk
             Py_ssize_t i, incr
             flatiter it
-            object res, tchunk, name, labels, index, typ
+            object res, name, labels, index
+            object cached_typ = None
 
         arr = self.arr
         chunk = self.dummy
@@ -84,31 +85,39 @@ cdef class Reducer:
         chunk.data = arr.data
         labels = self.labels
         index = self.index
-        typ = self.typ
         incr = self.increment
 
         try:
             for i in range(self.nresults):
-                # need to make sure that we pass an actual object to the function
-                # and not just an ndarray
-                if typ is not None:
-                     try:
-                         if labels is not None:
-                            name = labels[i]
+
+                if labels is not None:
+                    name = util.get_value_at(labels, i)
+                else:
+                    name = None
+
+                # create the cached type
+                # each time just reassign the data
+                if i == 0:
+
+                    if self.typ is not None:
 
                          # recreate with the index if supplied
                          if index is not None:
-                              tchunk = typ(chunk, index=index, name=name, fastpath=True)
+
+                             cached_typ = self.typ(chunk, index=index, name=name)
+
                          else:
-                             tchunk = typ(chunk, name=name)
 
-                     except:
-                         tchunk = chunk
-                         typ = None
+                             # use the passsed typ, sans index
+                             cached_typ = self.typ(chunk, name=name)
+
+                # use the cached_typ if possible
+                if cached_typ is not None:
+                    object.__setattr__(cached_typ._data._block, 'values', chunk)
+                    object.__setattr__(cached_typ, 'name', name)
+                    res = self.f(cached_typ)
                 else:
-                     tchunk = chunk
-
-                res = self.f(tchunk)
+                    res = self.f(chunk)
 
                 if hasattr(res,'values'):
                     res = res.values
@@ -154,7 +163,7 @@ cdef class SeriesBinGrouper:
         bint passed_dummy
 
     cdef public:
-        object arr, index, dummy_arr, dummy_index, values, f, bins, typ, ityp, name
+        object arr, index, dummy_arr, dummy_index, values, f, bins, typ, name
 
     def __init__(self, object series, object f, object bins, object dummy):
         n = len(series)
@@ -168,7 +177,6 @@ cdef class SeriesBinGrouper:
         self.arr = values
         self.index = series.index
         self.typ = type(series)
-        self.ityp = type(series.index)
         self.name = getattr(series,'name',None)
 
         self.dummy_arr, self.dummy_index = self._check_dummy(dummy)
@@ -185,9 +193,9 @@ cdef class SeriesBinGrouper:
             values = np.empty(0, dtype=self.arr.dtype)
             index = None
         else:
-            if dummy.dtype != self.arr.dtype:
-                raise ValueError('Dummy array must be same dtype')
             values = dummy.values
+            if values.dtype != self.arr.dtype:
+                raise ValueError('Dummy array must be same dtype')
             if not values.flags.contiguous:
                 values = values.copy()
             index = dummy.index
@@ -200,9 +208,10 @@ cdef class SeriesBinGrouper:
             ndarray[int64_t] counts
             Py_ssize_t i, n, group_size
             object res
-            bint initialized = 0, needs_typ = 1, try_typ = 0
+            bint initialized = 0
             Slider vslider, islider
-            object gin, typ, ityp, name
+            object gin, typ, name
+            object cached_typ = None
 
         counts = np.zeros(self.ngroups, dtype=np.int64)
 
@@ -216,19 +225,12 @@ cdef class SeriesBinGrouper:
 
         group_size = 0
         n = len(self.arr)
-        typ = self.typ
-        ityp = self.ityp
         name = self.name
 
         vslider = Slider(self.arr, self.dummy_arr)
         islider = Slider(self.index, self.dummy_index)
 
         gin = self.dummy_index._engine
-
-        # old numpy issue, need to always create and pass the Series
-        if is_numpy_prior_1_6_2:
-            try_typ = 1
-            needs_typ = 1
 
         try:
             for i in range(self.ngroups):
@@ -237,24 +239,15 @@ cdef class SeriesBinGrouper:
                 islider.set_length(group_size)
                 vslider.set_length(group_size)
 
-                # see if we need to create the object proper
-                if try_typ:
-                    if needs_typ:
-                          res = self.f(typ(vslider.buf, index=islider.buf,
-                                           name=name, fastpath=True))
-                    else:
-                          res = self.f(SNDArray(vslider.buf,islider.buf,name=name))
+                if cached_typ is None:
+                    cached_typ = self.typ(vslider.buf, index=islider.buf,
+                                          name=name)
                 else:
-                     try:
-                          res = self.f(SNDArray(vslider.buf,islider.buf,name=name))
-                          needs_typ = 0
-                     except:
-                          res = self.f(typ(vslider.buf, index=islider.buf,
-                                           name=name, fastpath=True))
-                          needs_typ = 1
+                    object.__setattr__(cached_typ._data._block, 'values', vslider.buf)
+                    object.__setattr__(cached_typ, '_index', islider.buf)
+                    object.__setattr__(cached_typ, 'name', name)
 
-                     try_typ = 1
-
+                res = self.f(cached_typ)
                 res = _extract_result(res)
                 if not initialized:
                     result = self._get_result_array(res)
@@ -299,7 +292,7 @@ cdef class SeriesGrouper:
         bint passed_dummy
 
     cdef public:
-        object arr, index, dummy_arr, dummy_index, f, labels, values, typ, ityp, name
+        object arr, index, dummy_arr, dummy_index, f, labels, values, typ, name
 
     def __init__(self, object series, object f, object labels,
                  Py_ssize_t ngroups, object dummy):
@@ -314,7 +307,6 @@ cdef class SeriesGrouper:
         self.arr = values
         self.index = series.index
         self.typ = type(series)
-        self.ityp = type(series.index)
         self.name = getattr(series,'name',None)
 
         self.dummy_arr, self.dummy_index = self._check_dummy(dummy)
@@ -326,9 +318,9 @@ cdef class SeriesGrouper:
             values = np.empty(0, dtype=self.arr.dtype)
             index  = None
         else:
+            values = dummy.values
             if dummy.dtype != self.arr.dtype:
                 raise ValueError('Dummy array must be same dtype')
-            values = dummy.values
             if not values.flags.contiguous:
                 values = values.copy()
             index  = dummy.index
@@ -341,27 +333,21 @@ cdef class SeriesGrouper:
             ndarray[int64_t] labels, counts
             Py_ssize_t i, n, group_size, lab
             object res
-            bint initialized = 0, needs_typ = 1, try_typ = 0
+            bint initialized = 0
             Slider vslider, islider
-            object gin, typ, ityp, name
+            object gin, typ, name
+            object cached_typ = None
 
         labels = self.labels
         counts = np.zeros(self.ngroups, dtype=np.int64)
         group_size = 0
         n = len(self.arr)
-        typ = self.typ
-        ityp = self.ityp
         name = self.name
 
         vslider = Slider(self.arr, self.dummy_arr)
         islider = Slider(self.index, self.dummy_index)
 
         gin = self.dummy_index._engine
-
-        # old numpy issue, need to always create and pass the Series
-        if is_numpy_prior_1_6_2:
-            try_typ = 1
-            needs_typ = 1
 
         try:
             for i in range(n):
@@ -379,27 +365,15 @@ cdef class SeriesGrouper:
                     islider.set_length(group_size)
                     vslider.set_length(group_size)
 
-                    # see if we need to create the object proper
-                    # try on the first go around
-                    if try_typ:
-                        if needs_typ:
-                              res = self.f(typ(vslider.buf, index=islider.buf,
-                                               name=name, fastpath=True))
-                        else:
-                              res = self.f(SNDArray(vslider.buf,islider.buf,name=name))
+                    if cached_typ is None:
+                        cached_typ = self.typ(vslider.buf, index=islider.buf,
+                                              name=name)
                     else:
+                        object.__setattr__(cached_typ._data._block, 'values', vslider.buf)
+                        object.__setattr__(cached_typ, '_index', islider.buf)
+                        object.__setattr__(cached_typ, 'name', name)
 
-                         # try with a numpy array directly
-                         try:
-                              res = self.f(SNDArray(vslider.buf,islider.buf,name=name))
-                              needs_typ = 0
-                         except (Exception), detail:
-                              res = self.f(typ(vslider.buf, index=islider.buf,
-                                               name=name, fastpath=True))
-                              needs_typ = 1
-
-                         try_typ = 1
-
+                    res = self.f(cached_typ)
                     res = _extract_result(res)
                     if not initialized:
                         result = self._get_result_array(res)

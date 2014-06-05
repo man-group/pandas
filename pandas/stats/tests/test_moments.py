@@ -114,18 +114,18 @@ class TestMoments(tm.TestCase):
         vals = np.empty(10, dtype=float)
         vals.fill(np.nan)
         rs = mom.rolling_window(vals, 5, 'boxcar', center=True)
-        self.assert_(np.isnan(rs).all())
+        self.assertTrue(np.isnan(rs).all())
 
         # empty
         vals = np.array([])
         rs = mom.rolling_window(vals, 5, 'boxcar', center=True)
-        self.assert_(len(rs) == 0)
+        self.assertEqual(len(rs), 0)
 
         # shorter than window
         vals = np.random.randn(5)
         rs = mom.rolling_window(vals, 10, 'boxcar')
-        self.assert_(np.isnan(rs).all())
-        self.assert_(len(rs) == 5)
+        self.assertTrue(np.isnan(rs).all())
+        self.assertEqual(len(rs), 5)
 
     def test_cmov_window_frame(self):
         _skip_if_no_scipy()
@@ -255,7 +255,7 @@ class TestMoments(tm.TestCase):
 
         # it works!
         result = mom.rolling_apply(arr, 10, np.sum)
-        self.assert_(isnull(result).all())
+        self.assertTrue(isnull(result).all())
 
         result = mom.rolling_apply(arr, 10, np.sum, min_periods=1)
         assert_almost_equal(result, result)
@@ -275,7 +275,7 @@ class TestMoments(tm.TestCase):
 
         result = mom.rolling_std(np.array([np.nan, np.nan, 3., 4., 5.]),
                                  3, min_periods=2)
-        self.assert_(np.isnan(result[2]))
+        self.assertTrue(np.isnan(result[2]))
 
     def test_rolling_std_neg_sqrt(self):
         # unit test from Bottleneck
@@ -288,14 +288,15 @@ class TestMoments(tm.TestCase):
                       0.00028718669878572767,
                       0.00028718669878572767])
         b = mom.rolling_std(a, window=3)
-        self.assert_(np.isfinite(b[2:]).all())
+        self.assertTrue(np.isfinite(b[2:]).all())
 
         b = mom.ewmstd(a, span=3)
-        self.assert_(np.isfinite(b[2:]).all())
+        self.assertTrue(np.isfinite(b[2:]).all())
 
     def test_rolling_var(self):
         self._check_moment_func(mom.rolling_var,
-                                lambda x: np.var(x, ddof=1))
+                                lambda x: np.var(x, ddof=1),
+                                test_stable=True)
         self._check_moment_func(functools.partial(mom.rolling_var, ddof=0),
                                 lambda x: np.var(x, ddof=0))
 
@@ -349,13 +350,15 @@ class TestMoments(tm.TestCase):
                            has_center=True,
                            has_time_rule=True,
                            preserve_nan=True,
-                           fill_value=None):
+                           fill_value=None,
+                           test_stable=False):
 
         self._check_ndarray(func, static_comp, window=window,
                             has_min_periods=has_min_periods,
                             preserve_nan=preserve_nan,
                             has_center=has_center,
-                            fill_value=fill_value)
+                            fill_value=fill_value,
+                            test_stable=test_stable)
 
         self._check_structures(func, static_comp,
                                has_min_periods=has_min_periods,
@@ -367,7 +370,8 @@ class TestMoments(tm.TestCase):
                        has_min_periods=True,
                        preserve_nan=True,
                        has_center=True,
-                       fill_value=None):
+                       fill_value=None,
+                       test_stable=False):
 
         result = func(self.arr, window)
         assert_almost_equal(result[-1],
@@ -387,16 +391,16 @@ class TestMoments(tm.TestCase):
 
             # min_periods is working correctly
             result = func(arr, 20, min_periods=15)
-            self.assert_(np.isnan(result[23]))
-            self.assert_(not np.isnan(result[24]))
+            self.assertTrue(np.isnan(result[23]))
+            self.assertFalse(np.isnan(result[24]))
 
-            self.assert_(not np.isnan(result[-6]))
-            self.assert_(np.isnan(result[-5]))
+            self.assertFalse(np.isnan(result[-6]))
+            self.assertTrue(np.isnan(result[-5]))
 
             arr2 = randn(20)
             result = func(arr2, 10, min_periods=5)
-            self.assert_(isnull(result[3]))
-            self.assert_(notnull(result[4]))
+            self.assertTrue(isnull(result[3]))
+            self.assertTrue(notnull(result[4]))
 
             # min_periods=0
             result0 = func(arr, 20, min_periods=0)
@@ -416,14 +420,20 @@ class TestMoments(tm.TestCase):
 
             assert_almost_equal(result[1], expected[10])
             if fill_value is None:
-                self.assert_(np.isnan(result[-9:]).all())
+                self.assertTrue(np.isnan(result[-9:]).all())
             else:
-                self.assert_((result[-9:] == 0).all())
+                self.assertTrue((result[-9:] == 0).all())
             if has_min_periods:
-                self.assert_(np.isnan(expected[23]))
-                self.assert_(np.isnan(result[14]))
-                self.assert_(np.isnan(expected[-5]))
-                self.assert_(np.isnan(result[-14]))
+                self.assertTrue(np.isnan(expected[23]))
+                self.assertTrue(np.isnan(result[14]))
+                self.assertTrue(np.isnan(expected[-5]))
+                self.assertTrue(np.isnan(result[-14]))
+
+        if test_stable:
+            result = func(self.arr + 1e9, window)
+            assert_almost_equal(result[-1],
+                                static_comp(self.arr[-50:] + 1e9))
+
 
     def _check_structures(self, func, static_comp,
                           has_min_periods=True, has_time_rule=True,
@@ -434,7 +444,7 @@ class TestMoments(tm.TestCase):
         tm.assert_isinstance(series_result, Series)
 
         frame_result = func(self.frame, 50)
-        self.assertEquals(type(frame_result), DataFrame)
+        self.assertEqual(type(frame_result), DataFrame)
 
         # check time_rule works
         if has_time_rule:
@@ -485,34 +495,13 @@ class TestMoments(tm.TestCase):
             assert_series_equal(series_xp, series_rs)
             assert_frame_equal(frame_xp, frame_rs)
 
-    def test_legacy_time_rule_arg(self):
-        # suppress deprecation warnings
-        sys.stderr = StringIO()
-
-        rng = bdate_range('1/1/2000', periods=20)
-        ts = Series(np.random.randn(20), index=rng)
-        ts = ts.take(np.random.permutation(len(ts))[:12]).sort_index()
-
-        try:
-            result = mom.rolling_mean(ts, 1, min_periods=1, freq='B')
-            expected = mom.rolling_mean(ts, 1, min_periods=1,
-                                        time_rule='WEEKDAY')
-            tm.assert_series_equal(result, expected)
-
-            result = mom.ewma(ts, span=5, freq='B')
-            expected = mom.ewma(ts, span=5, time_rule='WEEKDAY')
-            tm.assert_series_equal(result, expected)
-
-        finally:
-            sys.stderr = sys.__stderr__
-
     def test_ewma(self):
         self._check_ew(mom.ewma)
 
         arr = np.zeros(1000)
         arr[5] = 1
         result = mom.ewma(arr, span=100, adjust=False).sum()
-        self.assert_(np.abs(result - 1) < 1e-2)
+        self.assertTrue(np.abs(result - 1) < 1e-2)
 
     def test_ewma_nan_handling(self):
         s = Series([1.] + [np.nan] * 5 + [1.])
@@ -570,13 +559,13 @@ class TestMoments(tm.TestCase):
 
         # pass in ints
         result2 = func(np.arange(50), span=10)
-        self.assert_(result2.dtype == np.float_)
+        self.assertEqual(result2.dtype, np.float_)
 
     def _check_ew_structures(self, func):
         series_result = func(self.series, com=10)
         tm.assert_isinstance(series_result, Series)
         frame_result = func(self.frame, com=10)
-        self.assertEquals(type(frame_result), DataFrame)
+        self.assertEqual(type(frame_result), DataFrame)
 
     # binary moments
     def test_rolling_cov(self):
@@ -585,6 +574,9 @@ class TestMoments(tm.TestCase):
 
         result = mom.rolling_cov(A, B, 50, min_periods=25)
         assert_almost_equal(result[-1], np.cov(A[-50:], B[-50:])[0, 1])
+
+    def test_rolling_cov_pairwise(self):
+        self._check_pairwise_moment(mom.rolling_cov, 10, min_periods=5)
 
     def test_rolling_corr(self):
         A = self.series
@@ -603,12 +595,14 @@ class TestMoments(tm.TestCase):
         assert_almost_equal(result[-1], a.corr(b))
 
     def test_rolling_corr_pairwise(self):
-        panel = mom.rolling_corr_pairwise(self.frame, 10, min_periods=5)
+        self._check_pairwise_moment(mom.rolling_corr, 10, min_periods=5)
 
-        correl = panel.ix[:, 1, 5]
-        exp = mom.rolling_corr(self.frame[1], self.frame[5],
-                               10, min_periods=5)
-        tm.assert_series_equal(correl, exp)
+    def _check_pairwise_moment(self, func, *args, **kwargs):
+        panel = func(self.frame, *args, **kwargs)
+
+        actual = panel.ix[:, 1, 5]
+        expected = func(self.frame[1], self.frame[5], *args, **kwargs)
+        tm.assert_series_equal(actual, expected)
 
     def test_flex_binary_moment(self):
         # GH3155
@@ -666,8 +660,14 @@ class TestMoments(tm.TestCase):
     def test_ewmcov(self):
         self._check_binary_ew(mom.ewmcov)
 
+    def test_ewmcov_pairwise(self):
+        self._check_pairwise_moment(mom.ewmcov, span=10, min_periods=5)
+
     def test_ewmcorr(self):
         self._check_binary_ew(mom.ewmcorr)
+
+    def test_ewmcorr_pairwise(self):
+        self._check_pairwise_moment(mom.ewmcorr, span=10, min_periods=5)
 
     def _check_binary_ew(self, func):
         A = Series(randn(50), index=np.arange(50))
@@ -678,8 +678,8 @@ class TestMoments(tm.TestCase):
 
         result = func(A, B, 20, min_periods=5)
 
-        self.assert_(np.isnan(result.values[:15]).all())
-        self.assert_(not np.isnan(result.values[15:]).any())
+        self.assertTrue(np.isnan(result.values[:15]).all())
+        self.assertFalse(np.isnan(result.values[15:]).any())
 
         self.assertRaises(Exception, func, A, randn(50), 20, min_periods=5)
 
@@ -693,6 +693,21 @@ class TestMoments(tm.TestCase):
                                        min_periods=min_periods,
                                        freq=freq)
         self._check_expanding(expanding_mean, np.mean)
+
+    def test_expanding_apply_args_kwargs(self):
+        def mean_w_arg(x, const):
+            return np.mean(x) + const
+
+        df = DataFrame(np.random.rand(20, 3))
+
+        expected = mom.expanding_apply(df, np.mean) + 20.
+
+        assert_frame_equal(mom.expanding_apply(df, mean_w_arg, args=(20,)),
+                            expected)
+        assert_frame_equal(mom.expanding_apply(df, mean_w_arg,
+                                               kwargs={'const' : 20}),
+                            expected)
+
 
     def test_expanding_corr(self):
         A = self.series.dropna()
@@ -731,15 +746,67 @@ class TestMoments(tm.TestCase):
     def test_expanding_max(self):
         self._check_expanding(mom.expanding_max, np.max, preserve_nan=False)
 
-    def test_expanding_corr_pairwise(self):
-        result = mom.expanding_corr_pairwise(self.frame)
+    def test_expanding_cov_pairwise(self):
+        result = mom.expanding_cov(self.frame)
 
-        rolling_result = mom.rolling_corr_pairwise(self.frame,
-                                                   len(self.frame),
-                                                   min_periods=1)
+        rolling_result = mom.rolling_cov(self.frame, len(self.frame),
+                                         min_periods=1)
 
         for i in result.items:
             assert_almost_equal(result[i], rolling_result[i])
+
+    def test_expanding_corr_pairwise(self):
+        result = mom.expanding_corr(self.frame)
+
+        rolling_result = mom.rolling_corr(self.frame, len(self.frame),
+                                          min_periods=1)
+
+        for i in result.items:
+            assert_almost_equal(result[i], rolling_result[i])
+
+    def test_rolling_skew_edge_cases(self):
+
+        all_nan = Series([np.NaN] * 5)
+
+        # yields all NaN (0 variance)
+        d = Series([1] * 5)
+        x = mom.rolling_skew(d, window=5)
+        assert_series_equal(all_nan, x)
+
+        # yields all NaN (window too small)
+        d = Series(np.random.randn(5))
+        x = mom.rolling_skew(d, window=2)
+        assert_series_equal(all_nan, x)
+
+        # yields [NaN, NaN, NaN, 0.177994, 1.548824]
+        d = Series([-1.50837035, -0.1297039 ,  0.19501095,
+                       1.73508164,  0.41941401])
+        expected = Series([np.NaN, np.NaN, np.NaN,
+                              0.177994, 1.548824])
+        x = mom.rolling_skew(d, window=4)
+        assert_series_equal(expected, x)
+
+    def test_rolling_kurt_edge_cases(self):
+
+        all_nan = Series([np.NaN] * 5)
+
+        # yields all NaN (0 variance)
+        d = Series([1] * 5)
+        x = mom.rolling_kurt(d, window=5)
+        assert_series_equal(all_nan, x)
+
+        # yields all NaN (window too small)
+        d = Series(np.random.randn(5))
+        x = mom.rolling_kurt(d, window=3)
+        assert_series_equal(all_nan, x)
+
+        # yields [NaN, NaN, NaN, 1.224307, 2.671499]
+        d = Series([-1.50837035, -0.1297039 ,  0.19501095,
+                    1.73508164,  0.41941401])
+        expected = Series([np.NaN, np.NaN, np.NaN,
+                           1.224307, 2.671499])
+        x = mom.rolling_kurt(d, window=4)
+        assert_series_equal(expected, x)
 
     def _check_expanding_ndarray(self, func, static_comp, has_min_periods=True,
                                  has_time_rule=True, preserve_nan=True):
@@ -760,13 +827,13 @@ class TestMoments(tm.TestCase):
 
             # min_periods is working correctly
             result = func(arr, min_periods=15)
-            self.assert_(np.isnan(result[13]))
-            self.assert_(not np.isnan(result[14]))
+            self.assertTrue(np.isnan(result[13]))
+            self.assertFalse(np.isnan(result[14]))
 
             arr2 = randn(20)
             result = func(arr2, min_periods=5)
-            self.assert_(isnull(result[3]))
-            self.assert_(notnull(result[4]))
+            self.assertTrue(isnull(result[3]))
+            self.assertTrue(notnull(result[4]))
 
             # min_periods=0
             result0 = func(arr, min_periods=0)
@@ -780,7 +847,7 @@ class TestMoments(tm.TestCase):
         series_result = func(self.series)
         tm.assert_isinstance(series_result, Series)
         frame_result = func(self.frame)
-        self.assertEquals(type(frame_result), DataFrame)
+        self.assertEqual(type(frame_result), DataFrame)
 
     def _check_expanding(self, func, static_comp, has_min_periods=True,
                          has_time_rule=True,
@@ -790,6 +857,97 @@ class TestMoments(tm.TestCase):
                                       has_time_rule=has_time_rule,
                                       preserve_nan=preserve_nan)
         self._check_expanding_structures(func)
+
+    def test_rolling_max_gh6297(self):
+        """Replicate result expected in GH #6297"""
+
+        indices = [datetime(1975, 1, i) for i in range(1, 6)]
+        # So that we can have 2 datapoints on one of the days
+        indices.append(datetime(1975, 1, 3, 6, 0))
+        series = Series(range(1, 7), index=indices)
+        # Use floats instead of ints as values
+        series = series.map(lambda x: float(x))
+        # Sort chronologically
+        series = series.sort_index()
+
+        expected = Series([1.0, 2.0, 6.0, 4.0, 5.0],
+                          index=[datetime(1975, 1, i, 0)
+                                 for i in range(1, 6)])
+        x = mom.rolling_max(series, window=1, freq='D')
+        assert_series_equal(expected, x)
+
+    def test_rolling_max_how_resample(self):
+
+        indices = [datetime(1975, 1, i) for i in range(1, 6)]
+        # So that we can have 3 datapoints on last day (4, 10, and 20)
+        indices.append(datetime(1975, 1, 5, 1))
+        indices.append(datetime(1975, 1, 5, 2))
+        series = Series(list(range(0, 5)) + [10, 20], index=indices)
+        # Use floats instead of ints as values
+        series = series.map(lambda x: float(x))
+        # Sort chronologically
+        series = series.sort_index()
+
+        # Default how should be max
+        expected = Series([0.0, 1.0, 2.0, 3.0, 20.0],
+                          index=[datetime(1975, 1, i, 0)
+                                 for i in range(1, 6)])
+        x = mom.rolling_max(series, window=1, freq='D')
+        assert_series_equal(expected, x)
+
+        # Now specify median (10.0)
+        expected = Series([0.0, 1.0, 2.0, 3.0, 10.0],
+                          index=[datetime(1975, 1, i, 0)
+                                 for i in range(1, 6)])
+        x = mom.rolling_max(series, window=1, freq='D', how='median')
+        assert_series_equal(expected, x)
+
+        # Now specify mean (4+10+20)/3
+        v = (4.0+10.0+20.0)/3.0
+        expected = Series([0.0, 1.0, 2.0, 3.0, v],
+                          index=[datetime(1975, 1, i, 0)
+                                 for i in range(1, 6)])
+        x = mom.rolling_max(series, window=1, freq='D', how='mean')
+        assert_series_equal(expected, x)
+
+
+    def test_rolling_min_how_resample(self):
+
+        indices = [datetime(1975, 1, i) for i in range(1, 6)]
+        # So that we can have 3 datapoints on last day (4, 10, and 20)
+        indices.append(datetime(1975, 1, 5, 1))
+        indices.append(datetime(1975, 1, 5, 2))
+        series = Series(list(range(0, 5)) + [10, 20], index=indices)
+        # Use floats instead of ints as values
+        series = series.map(lambda x: float(x))
+        # Sort chronologically
+        series = series.sort_index()
+
+        # Default how should be min
+        expected = Series([0.0, 1.0, 2.0, 3.0, 4.0],
+                          index=[datetime(1975, 1, i, 0)
+                                 for i in range(1, 6)])
+        x = mom.rolling_min(series, window=1, freq='D')
+        assert_series_equal(expected, x)
+
+    def test_rolling_median_how_resample(self):
+
+        indices = [datetime(1975, 1, i) for i in range(1, 6)]
+        # So that we can have 3 datapoints on last day (4, 10, and 20)
+        indices.append(datetime(1975, 1, 5, 1))
+        indices.append(datetime(1975, 1, 5, 2))
+        series = Series(list(range(0, 5)) + [10, 20], index=indices)
+        # Use floats instead of ints as values
+        series = series.map(lambda x: float(x))
+        # Sort chronologically
+        series = series.sort_index()
+
+        # Default how should be median
+        expected = Series([0.0, 1.0, 2.0, 3.0, 10],
+                          index=[datetime(1975, 1, i, 0)
+                                 for i in range(1, 6)])
+        x = mom.rolling_median(series, window=1, freq='D')
+        assert_series_equal(expected, x)
 
 if __name__ == '__main__':
     import nose

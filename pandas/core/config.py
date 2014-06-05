@@ -100,54 +100,29 @@ def _get_option(pat, silent=False):
     return root[k]
 
 
-def _set_single_option(pat, value, silent):
-    key = _get_single_key(pat, silent)
-
-    o = _get_registered_option(key)
-    if o and o.validator:
-        o.validator(value)
-
-    # walk the nested dict
-    root, k = _get_root(key)
-    root[k] = value
-
-    if o.cb:
-        o.cb(key)
-
-
-def _set_multiple_options(args, silent):
-    for k, v in zip(args[::2], args[1::2]):
-        _set_single_option(k, v, silent)
-
-
 def _set_option(*args, **kwargs):
     # must at least 1 arg deal with constraints later
     nargs = len(args)
     if not nargs or nargs % 2 != 0:
-        raise AssertionError("Must provide an even number of non-keyword "
+        raise ValueError("Must provide an even number of non-keyword "
                              "arguments")
-
-    # must be 0 or 1 kwargs
-    nkwargs = len(kwargs)
-    if nkwargs not in (0, 1):
-        raise AssertionError("The can only be 0 or 1 keyword arguments")
-
-    # if 1 kwarg then it must be silent=True or silent=False
-    if nkwargs:
-        k, = list(kwargs.keys())
-        v, = list(kwargs.values())
-
-        if k != 'silent':
-            raise ValueError("the only allowed keyword argument is 'silent', "
-                             "you passed '{0}'".format(k))
-        if not isinstance(v, bool):
-            raise TypeError("the type of the keyword argument passed must be "
-                            "bool, you passed a {0}".format(v.__class__))
 
     # default to false
     silent = kwargs.get('silent', False)
-    _set_multiple_options(args, silent)
 
+    for k, v in zip(args[::2], args[1::2]):
+        key = _get_single_key(k, silent)
+
+        o = _get_registered_option(key)
+        if o and o.validator:
+            o.validator(v)
+
+        # walk the nested dict
+        root, k = _get_root(key)
+        root[k] = v
+
+        if o.cb:
+            o.cb(key)
 
 def _describe_option(pat='', _print_desc=True):
 
@@ -165,7 +140,7 @@ def _describe_option(pat='', _print_desc=True):
         return s
 
 
-def _reset_option(pat):
+def _reset_option(pat, silent=False):
 
     keys = _select_options(pat)
 
@@ -179,7 +154,7 @@ def _reset_option(pat):
                          'value')
 
     for k in keys:
-        _set_option(k, _registered_options[k].defval)
+        _set_option(k, _registered_options[k].defval, silent=silent)
 
 
 def get_default_val(pat):
@@ -249,45 +224,55 @@ class CallableDynamicDoc(object):
                                         opts_list=opts_list)
 
 _get_option_tmpl = """
-get_option(pat) - Retrieves the value of the specified option
+get_option(pat)
+
+Retrieves the value of the specified option.
 
 Available options:
+
 {opts_list}
 
 Parameters
 ----------
-pat - str/regexp which should match a single option.
-
-Note: partial matches are supported for convenience, but unless you use the
-full option name (e.g. x.y.z.option_name), your code may break in future
-versions if new options with similar names are introduced.
+pat : str
+    Regexp which should match a single option.
+    Note: partial matches are supported for convenience, but unless you use the
+    full option name (e.g. x.y.z.option_name), your code may break in future
+    versions if new options with similar names are introduced.
 
 Returns
 -------
-result - the value of the option
+result : the value of the option
 
 Raises
 ------
-OptionError if no such option exists
+OptionError : if no such option exists
+
+Notes
+-----
+The available options with its descriptions:
 
 {opts_desc}
 """
 
 _set_option_tmpl = """
-set_option(pat,value) - Sets the value of the specified option
+set_option(pat, value)
+
+Sets the value of the specified option.
 
 Available options:
+
 {opts_list}
 
 Parameters
 ----------
-pat - str/regexp which should match a single option.
-
-Note: partial matches are supported for convenience, but unless you use the
-full option name (e.g. x.y.z.option_name), your code may break in future
-versions if new options with similar names are introduced.
-
-value - new value of option.
+pat : str
+    Regexp which should match a single option.
+    Note: partial matches are supported for convenience, but unless you use the
+    full option name (e.g. x.y.z.option_name), your code may break in future
+    versions if new options with similar names are introduced.
+value :
+    new value of option.
 
 Returns
 -------
@@ -297,54 +282,71 @@ Raises
 ------
 OptionError if no such option exists
 
+Notes
+-----
+The available options with its descriptions:
+
 {opts_desc}
 """
 
 _describe_option_tmpl = """
-describe_option(pat,_print_desc=False) Prints the description
-for one or more registered options.
+describe_option(pat, _print_desc=False)
+
+Prints the description for one or more registered options.
 
 Call with not arguments to get a listing for all registered options.
 
 Available options:
+
 {opts_list}
 
 Parameters
 ----------
-pat - str, a regexp pattern. All matching keys will have their
-      description displayed.
-
-_print_desc - if True (default) the description(s) will be printed
-             to stdout otherwise, the description(s) will be returned
-             as a unicode string (for testing).
+pat : str
+    Regexp pattern. All matching keys will have their description displayed.
+_print_desc : bool, default True
+    If True (default) the description(s) will be printed to stdout.
+    Otherwise, the description(s) will be returned as a unicode string
+    (for testing).
 
 Returns
 -------
 None by default, the description(s) as a unicode string if _print_desc
 is False
 
+Notes
+-----
+The available options with its descriptions:
+
 {opts_desc}
 """
 
 _reset_option_tmpl = """
-reset_option(pat) - Reset one or more options to their default value.
+reset_option(pat)
+
+Reset one or more options to their default value.
 
 Pass "all" as argument to reset all options.
 
 Available options:
+
 {opts_list}
 
 Parameters
 ----------
-pat - str/regex  if specified only options matching `prefix`* will be reset
-
-Note: partial matches are supported for convenience, but unless you use the
-full option name (e.g. x.y.z.option_name), your code may break in future
-versions if new options with similar names are introduced.
+pat : str/regex 
+    If specified only options matching `prefix*` will be reset. 
+    Note: partial matches are supported for convenience, but unless you
+    use the full option name (e.g. x.y.z.option_name), your code may break
+    in future versions if new options with similar names are introduced.
 
 Returns
 -------
 None
+
+Notes
+-----
+The available options with its descriptions:
 
 {opts_desc}
 """
@@ -362,10 +364,22 @@ options = DictWrapper(_global_config)
 
 
 class option_context(object):
+    """
+    Context manager to temporarily set options in the `with` statement context.
+
+    You need to invoke as ``option_context(pat, val, [(pat, val), ...])``.
+    
+    Examples
+    --------
+
+    >>> with option_context('display.max_rows', 10, 'display.max_columns', 5):
+            ...
+
+    """
 
     def __init__(self, *args):
         if not (len(args) % 2 == 0 and len(args) >= 2):
-            raise AssertionError(
+            raise ValueError(
                 'Need to invoke as'
                 'option_context(pat, val, [(pat, val), ...)).'
             )
@@ -386,7 +400,7 @@ class option_context(object):
     def __exit__(self, *args):
         if self.undo:
             for pat, val in self.undo:
-                _set_option(pat, val)
+                _set_option(pat, val, silent=True)
 
 
 def register_option(key, defval, doc='', validator=None, cb=None):
@@ -592,6 +606,7 @@ def _warn_if_deprecated(key):
     d = _get_deprecated_option(key)
     if d:
         if d.msg:
+            print(d.msg)
             warnings.warn(d.msg, DeprecationWarning)
         else:
             msg = "'%s' is deprecated" % key
@@ -613,13 +628,13 @@ def _build_option_description(k):
     o = _get_registered_option(k)
     d = _get_deprecated_option(k)
 
-    s = u('%s: ') % k
+    s = u('%s : ') % k
     if o:
         s += u('[default: %s] [currently: %s]') % (o.defval,
                                                    _get_option(k, True))
 
     if o.doc:
-        s += '\n' + '\n    '.join(o.doc.strip().split('\n'))
+        s += '\n    '.join(o.doc.strip().split('\n'))
     else:
         s += 'No description available.\n'
 
@@ -628,7 +643,7 @@ def _build_option_description(k):
         s += (u(', use `%s` instead.') % d.rkey if d.rkey else '')
         s += u(')\n')
 
-    s += '\n'
+    s += '\n\n'
     return s
 
 
@@ -639,9 +654,9 @@ def pp_options_list(keys, width=80, _print=False):
     from itertools import groupby
 
     def pp(name, ks):
-        pfx = (name + '.[' if name else '')
+        pfx = ('- ' + name + '.[' if name else '')
         ls = wrap(', '.join(ks), width, initial_indent=pfx,
-                  subsequent_indent=' ' * len(pfx), break_long_words=False)
+                  subsequent_indent='  ', break_long_words=False)
         if ls and ls[-1] and name:
             ls[-1] = ls[-1] + ']'
         return ls

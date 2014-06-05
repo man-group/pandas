@@ -213,6 +213,33 @@ This is also a valid argument to ``DataFrame.append``:
 
    df1.append(df2, ignore_index=True)
 
+.. _merging.mixed_ndims:
+
+Concatenating with mixed ndims
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+You can concatenate a mix of Series and DataFrames. The
+Series will be transformed to DataFrames with the column name as
+the name of the Series.
+
+.. ipython:: python
+
+   df1 = DataFrame(randn(6, 4), columns=['A', 'B', 'C', 'D'])
+   s1 = Series(randn(6), name='foo')
+   concat([df1, s1],axis=1)
+
+If unnamed Series are passed they will be numbered consecutively.
+
+.. ipython:: python
+
+   s2 = Series(randn(6))
+   concat([df1, s2, s2, s2],axis=1)
+
+Passing ``ignore_index=True`` will drop all name references.
+
+.. ipython:: python
+
+   concat([df1, s1],axis=1,ignore_index=True)
 
 More concatenating with group keys
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -307,7 +334,7 @@ the data in DataFrame.
 
 See the :ref:`cookbook<cookbook.merge>` for some advanced strategies.
 
-Users who are familiar with SQL but new to pandas might be interested in a 
+Users who are familiar with SQL but new to pandas might be interested in a
 :ref:`comparison with SQL<compare_with_sql.join>`.
 
 pandas provides a single function, ``merge``, as the entry point for all
@@ -580,8 +607,6 @@ them together on their indexes. The same is true for ``Panel.join``.
    df1
    df1.join([df2, df3])
 
-.. _merging.combine_first:
-
 .. _merging.combine_first.update:
 
 Merging together values within Series or DataFrame columns
@@ -612,3 +637,77 @@ values inplace:
 
    df1.update(df2)
    df1
+
+.. _merging.on_mi:
+
+Merging with Multi-indexes
+--------------------------
+
+.. _merging.join_on_mi:
+
+Joining a single Index to a Multi-index
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. versionadded:: 0.14.0
+
+You can join a singly-indexed DataFrame with a level of a multi-indexed DataFrame.
+The level will match on the name of the index of the singly-indexed frame against
+a level name of the multi-indexed frame.
+
+..  ipython:: python
+
+    household = DataFrame(dict(household_id = [1,2,3],
+                               male = [0,1,0],
+                               wealth = [196087.3,316478.7,294750]),
+                          columns = ['household_id','male','wealth']
+                         ).set_index('household_id')
+    household
+    portfolio = DataFrame(dict(household_id = [1,2,2,3,3,3,4],
+                               asset_id = ["nl0000301109","nl0000289783","gb00b03mlx29",
+                                           "gb00b03mlx29","lu0197800237","nl0000289965",np.nan],
+                               name = ["ABN Amro","Robeco","Royal Dutch Shell","Royal Dutch Shell",
+                                       "AAB Eastern Europe Equity Fund","Postbank BioTech Fonds",np.nan],
+                               share = [1.0,0.4,0.6,0.15,0.6,0.25,1.0]),
+                          columns = ['household_id','asset_id','name','share']
+                         ).set_index(['household_id','asset_id'])
+    portfolio
+
+    household.join(portfolio, how='inner')
+
+This is equivalent but less verbose and more memory efficient / faster than this.
+
+.. code-block:: python
+
+    merge(household.reset_index(),
+          portfolio.reset_index(),
+          on=['household_id'],
+          how='inner'
+         ).set_index(['household_id','asset_id'])
+
+Joining with two multi-indexes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This is not Implemented via ``join`` at-the-moment, however it can be done using the following.
+
+.. ipython:: python
+
+   household = DataFrame(dict(household_id = [1,2,2,3,3,3,4],
+                              asset_id = ["nl0000301109","nl0000301109","gb00b03mlx29",
+                                          "gb00b03mlx29","lu0197800237","nl0000289965",np.nan],
+                              share = [1.0,0.4,0.6,0.15,0.6,0.25,1.0]),
+                         columns = ['household_id','asset_id','share']
+                        ).set_index(['household_id','asset_id'])
+   household
+
+   log_return = DataFrame(dict(asset_id = ["gb00b03mlx29", "gb00b03mlx29", "gb00b03mlx29",
+                                           "lu0197800237", "lu0197800237"],
+                               t = [233, 234, 235, 180, 181],
+                               log_return = [.09604978, -.06524096, .03532373, .03025441, .036997]),
+                         ).set_index(["asset_id","t"])
+   log_return
+
+   merge(household.reset_index(),
+         log_return.reset_index(),
+         on=['asset_id'],
+         how='inner'
+        ).set_index(['household_id','asset_id','t'])

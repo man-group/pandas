@@ -94,7 +94,7 @@ Datetimes
 
 For datetime64[ns] types, ``NaT`` represents missing values. This is a pseudo-native
 sentinel value that can be represented by numpy in a singular dtype (datetime64[ns]).
-Pandas objects provide intercompatibility between ``NaT`` and ``NaN``.
+pandas objects provide intercompatibility between ``NaT`` and ``NaN``.
 
 .. ipython:: python
 
@@ -596,6 +596,33 @@ You can also operate on the DataFrame in place
 
    df.replace(1.5, nan, inplace=True)
 
+.. warning::
+
+   When replacing multiple ``bool`` or ``datetime64`` objects, the first
+   argument to ``replace`` (``to_replace``) must match the type of the value
+   being replaced type. For example,
+
+   .. code-block:: python
+
+      s = Series([True, False, True])
+      s.replace({'a string': 'new value', True: False})  # raises
+
+      TypeError: Cannot compare types 'ndarray(dtype=bool)' and 'str'
+
+   will raise a ``TypeError`` because one of the ``dict`` keys is not of the
+   correct type for replacement.
+
+   However, when replacing a *single* object such as,
+
+   .. ipython:: python
+
+      s = Series([True, False, True])
+      s.replace('a string', 'another string')
+
+   the original ``NDFrame`` object will be returned untouched. We're working on
+   unifying this API, but for backwards compatibility reasons we cannot break
+   the latter behavior. See :issue:`6354` for more details.
+
 Missing data casting rules and indexing
 ---------------------------------------
 
@@ -642,4 +669,3 @@ However, these can be filled in using **fillna** and it will work fine:
 
    reindexed[crit.fillna(False)]
    reindexed[crit.fillna(True)]
-

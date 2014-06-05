@@ -18,7 +18,7 @@ from numpy.testing import assert_array_equal
 from pandas.core.reshape import (melt, convert_dummies, lreshape, get_dummies,
                                  wide_to_long)
 import pandas.util.testing as tm
-from pandas.compat import StringIO, cPickle, range
+from pandas.compat import StringIO, cPickle, range, u
 
 _multiprocess_can_split_ = True
 
@@ -119,7 +119,7 @@ class TestMelt(tm.TestCase):
                         var_name=self.var_name, value_name=self.value_name)
         self.assertEqual(result17.columns.tolist(), ['id1', 'id2', 'var', 'val'])
 
-        result18 = melt(df, id_vars=['id1', 'id2'],
+        result18 = melt(self.df, id_vars=['id1', 'id2'],
                         value_vars='A', var_name=self.var_name, value_name=self.value_name)
         self.assertEqual(result18.columns.tolist(), ['id1', 'id2', 'var', 'val'])
 
@@ -127,14 +127,14 @@ class TestMelt(tm.TestCase):
                         value_vars=['A', 'B'], var_name=self.var_name, value_name=self.value_name)
         expected19 = DataFrame({'id1': self.df['id1'].tolist() * 2,
                                 'id2': self.df['id2'].tolist() * 2,
-                                var_name: ['A']*10 + ['B']*10,
-                                value_name: self.df['A'].tolist() + self.df['B'].tolist()},
+                                self.var_name: ['A']*10 + ['B']*10,
+                                self.value_name: self.df['A'].tolist() + self.df['B'].tolist()},
                                columns=['id1', 'id2', self.var_name, self.value_name])
         tm.assert_frame_equal(result19, expected19)
 
-    def test_custom_var_and_value_name(self):
-        self.df.columns.name = 'foo'
-        result20 = melt(self.df)
+        df20 = self.df.copy()
+        df20.columns.name = 'foo'
+        result20 = melt(df20)
         self.assertEqual(result20.columns.tolist(), ['foo', 'value'])
 
     def test_col_level(self):
@@ -198,6 +198,16 @@ class TestGetDummies(tm.TestCase):
         res_just_na = get_dummies([nan], dummy_na=True)
         exp_just_na = DataFrame(Series(1.0,index=[0]),columns=[nan])
         assert_array_equal(res_just_na.values, exp_just_na.values)
+
+    def test_unicode(self):  # See GH 6885 - get_dummies chokes on unicode values
+        import unicodedata
+        e = 'e'
+        eacute = unicodedata.lookup('LATIN SMALL LETTER E WITH ACUTE')
+        s = [e, eacute, eacute]
+        res = get_dummies(s, prefix='letter')
+        exp = DataFrame({'letter_e': {0: 1.0, 1: 0.0, 2: 0.0},
+                        u('letter_%s') % eacute: {0: 0.0, 1: 1.0, 2: 1.0}})
+        assert_frame_equal(res, exp)
 
 class TestConvertDummies(tm.TestCase):
     def test_convert_dummies(self):

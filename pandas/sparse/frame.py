@@ -13,7 +13,7 @@ import numpy as np
 from pandas.core.common import (isnull, notnull, _pickle_array,
                                 _unpickle_array, _try_sort)
 from pandas.core.index import Index, MultiIndex, _ensure_index
-from pandas.core.indexing import _check_slice_bounds, _maybe_convert_indices
+from pandas.core.indexing import _maybe_convert_indices
 from pandas.core.series import Series
 from pandas.core.frame import (DataFrame, extract_index, _prep_ndarray,
                                _default_index)
@@ -346,10 +346,15 @@ class SparseDataFrame(DataFrame):
             return self._get_item_cache(key)
 
     @Appender(DataFrame.get_value.__doc__, indents=0)
-    def get_value(self, index, col):
-        return self._get_item_cache(col).get_value(index)
+    def get_value(self, index, col, takeable=False):
+        if takeable is True:
+            series = self._iget_item_cache(col)
+        else:
+            series = self._get_item_cache(col)
 
-    def set_value(self, index, col, value):
+        return series.get_value(index, takeable=takeable)
+
+    def set_value(self, index, col, value, takeable=False):
         """
         Put single value at passed column and index
 
@@ -358,6 +363,7 @@ class SparseDataFrame(DataFrame):
         index : row label
         col : column label
         value : scalar value
+        takeable : interpret the index/col as indexers, default False
 
         Notes
         -----
@@ -369,19 +375,15 @@ class SparseDataFrame(DataFrame):
         -------
         frame : DataFrame
         """
-        dense = self.to_dense().set_value(index, col, value)
+        dense = self.to_dense().set_value(index, col, value, takeable=takeable)
         return dense.to_sparse(kind=self._default_kind,
                                fill_value=self._default_fill_value)
 
-    def _slice(self, slobj, axis=0, raise_on_error=False, typ=None):
+    def _slice(self, slobj, axis=0, typ=None):
         if axis == 0:
-            if raise_on_error:
-                _check_slice_bounds(slobj, self.index)
             new_index = self.index[slobj]
             new_columns = self.columns
         else:
-            if raise_on_error:
-                _check_slice_bounds(slobj, self.columns)
             new_index = self.index
             new_columns = self.columns[slobj]
 
@@ -454,10 +456,12 @@ class SparseDataFrame(DataFrame):
                                  default_fill_value=new_fill_value,
                                  fill_value=new_fill_value).__finalize__(self)
 
-    def _combine_match_index(self, other, func, fill_value=None):
+    def _combine_match_index(self, other, func, level=None, fill_value=None):
         new_data = {}
 
         if fill_value is not None:
+            raise NotImplementedError
+        if level is not None:
             raise NotImplementedError
 
         new_index = self.index.union(other.index)
@@ -484,13 +488,15 @@ class SparseDataFrame(DataFrame):
                                  default_fill_value=fill_value,
                                  fill_value=self.default_fill_value).__finalize__(self)
 
-    def _combine_match_columns(self, other, func, fill_value):
+    def _combine_match_columns(self, other, func, level=None, fill_value=None):
         # patched version of DataFrame._combine_match_columns to account for
         # NumPy circumventing __rsub__ with float64 types, e.g.: 3.0 - series,
         # where 3.0 is numpy.float64 and series is a SparseSeries. Still
         # possible for this to happen, which is bothersome
 
         if fill_value is not None:
+            raise NotImplementedError
+        if level is not None:
             raise NotImplementedError
 
         new_data = {}

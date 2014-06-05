@@ -24,6 +24,13 @@ def _skip_if_no_scipy():
     except ImportError:
         raise nose.SkipTest("scipy not installed")
 
+def _skip_if_no_scipy_gaussian_kde():
+    try:
+        import scipy
+        from scipy.stats import gaussian_kde
+    except ImportError:
+        raise nose.SkipTest("scipy version doesn't support gaussian_kde")
+
 
 @tm.mplskip
 class TestTSPlot(tm.TestCase):
@@ -81,7 +88,7 @@ class TestTSPlot(tm.TestCase):
         df = DataFrame({'A': ["x", "y", "z"], 'B': [1,2,3]}, idx)
 
         ax = df.plot() # it works
-        self.assert_(len(ax.get_lines()) == 1) #B was plotted
+        self.assertEqual(len(ax.get_lines()), 1) #B was plotted
         plt.close(plt.gcf())
 
         self.assertRaises(TypeError, df['A'].plot)
@@ -124,12 +131,27 @@ class TestTSPlot(tm.TestCase):
 
     def test_get_datevalue(self):
         from pandas.tseries.converter import get_datevalue
-        self.assert_(get_datevalue(None, 'D') is None)
+        self.assertIsNone(get_datevalue(None, 'D'))
         self.assertEqual(get_datevalue(1987, 'A'), 1987)
         self.assertEqual(get_datevalue(Period(1987, 'A'), 'M'),
                          Period('1987-12', 'M').ordinal)
         self.assertEqual(get_datevalue('1/1/1987', 'D'),
                          Period('1987-1-1', 'D').ordinal)
+
+    @slow
+    def test_ts_plot_format_coord(self):
+        def check_format_of_first_point(ax, expected_string):
+            first_line = ax.get_lines()[0]
+            first_x = first_line.get_xdata()[0].ordinal
+            first_y = first_line.get_ydata()[0]
+            self.assertEqual(expected_string, ax.format_coord(first_x, first_y))
+
+        annual = Series(1, index=date_range('2014-01-01', periods=3, freq='A-DEC'))
+        check_format_of_first_point(annual.plot(), 't = 2014  y = 1.000000')
+
+        # note this is added to the annual plot already in existence, and changes its freq field
+        daily = Series(1, index=date_range('2014-01-01', periods=3, freq='D'))
+        check_format_of_first_point(daily.plot(), 't = 2014-01-01  y = 1.000000')
 
     @slow
     def test_line_plot_period_series(self):
@@ -226,7 +248,7 @@ class TestTSPlot(tm.TestCase):
         diffs = Series(ax.get_lines()[0].get_xydata()[:, 0]).diff()
 
         sec = 1. / 24 / 60 / 60
-        self.assert_((np.fabs(diffs[1:] - [sec, sec * 2, sec]) < 1e-8).all())
+        self.assertTrue((np.fabs(diffs[1:] - [sec, sec * 2, sec]) < 1e-8).all())
 
         plt.clf()
         fig.add_subplot(111)
@@ -234,7 +256,7 @@ class TestTSPlot(tm.TestCase):
         df2.index = df.index.asobject
         ax = df2.plot()
         diffs = Series(ax.get_lines()[0].get_xydata()[:, 0]).diff()
-        self.assert_((np.fabs(diffs[1:] - sec) < 1e-8).all())
+        self.assertTrue((np.fabs(diffs[1:] - sec) < 1e-8).all())
 
     def test_irregular_datetime64_repr_bug(self):
         import matplotlib.pyplot as plt
@@ -245,7 +267,7 @@ class TestTSPlot(tm.TestCase):
         plt.clf()
         ax = fig.add_subplot(211)
         ret = ser.plot()
-        self.assert_(ret is not None)
+        self.assertIsNotNone(ret)
 
         for rs, xp in zip(ax.get_lines()[0].get_xdata(), ser.index):
             self.assertEqual(rs, xp)
@@ -390,7 +412,7 @@ class TestTSPlot(tm.TestCase):
             ax = ser.plot()
             xaxis = ax.get_xaxis()
             rs = xaxis.get_majorticklocs()[0]
-            self.assert_(rs == xp)
+            self.assertEqual(rs, xp)
             vmin, vmax = ax.get_xlim()
             ax.set_xlim(vmin + 0.9, vmax)
             rs = xaxis.get_majorticklocs()[0]
@@ -453,7 +475,7 @@ class TestTSPlot(tm.TestCase):
         data = l.get_xydata()
         tm.assert_isinstance(data, np.ma.core.MaskedArray)
         mask = data.mask
-        self.assert_(mask[5:25, 1].all())
+        self.assertTrue(mask[5:25, 1].all())
         plt.close(ax.get_figure())
 
         # irregular
@@ -467,7 +489,7 @@ class TestTSPlot(tm.TestCase):
         data = l.get_xydata()
         tm.assert_isinstance(data, np.ma.core.MaskedArray)
         mask = data.mask
-        self.assert_(mask[2:5, 1].all())
+        self.assertTrue(mask[2:5, 1].all())
         plt.close(ax.get_figure())
 
         # non-ts
@@ -481,7 +503,7 @@ class TestTSPlot(tm.TestCase):
         data = l.get_xydata()
         tm.assert_isinstance(data, np.ma.core.MaskedArray)
         mask = data.mask
-        self.assert_(mask[2:5, 1].all())
+        self.assertTrue(mask[2:5, 1].all())
 
     @slow
     def test_gap_upsample(self):
@@ -499,7 +521,7 @@ class TestTSPlot(tm.TestCase):
         data = l.get_xydata()
         tm.assert_isinstance(data, np.ma.core.MaskedArray)
         mask = data.mask
-        self.assert_(mask[5:25, 1].all())
+        self.assertTrue(mask[5:25, 1].all())
 
     @slow
     def test_secondary_y(self):
@@ -523,7 +545,7 @@ class TestTSPlot(tm.TestCase):
 
         ax = ser2.plot()
         ax2 = ser.plot(secondary_y=True).right_ax
-        self.assert_(ax.get_yaxis().get_visible())
+        self.assertTrue(ax.get_yaxis().get_visible())
 
     @slow
     def test_secondary_y_ts(self):
@@ -547,11 +569,12 @@ class TestTSPlot(tm.TestCase):
 
         ax = ser2.plot()
         ax2 = ser.plot(secondary_y=True)
-        self.assert_(ax.get_yaxis().get_visible())
+        self.assertTrue(ax.get_yaxis().get_visible())
 
     @slow
     def test_secondary_kde(self):
         _skip_if_no_scipy()
+        _skip_if_no_scipy_gaussian_kde()
 
         import matplotlib.pyplot as plt
         ser = Series(np.random.randn(10))
@@ -593,8 +616,8 @@ class TestTSPlot(tm.TestCase):
         lines = ax2.get_lines()
         idx1 = lines[0].get_xdata()
         idx2 = lines[1].get_xdata()
-        self.assert_(idx1.equals(s1.index.to_period('B')))
-        self.assert_(idx2.equals(s2.index.to_period('B')))
+        self.assertTrue(idx1.equals(s1.index.to_period('B')))
+        self.assertTrue(idx2.equals(s2.index.to_period('B')))
         left, right = ax2.get_xlim()
         pidx = s1.index.to_period()
         self.assertEqual(left, pidx[0].ordinal)
@@ -680,7 +703,7 @@ class TestTSPlot(tm.TestCase):
         high.plot()
         ax = low.plot()
         for l in ax.get_lines():
-            self.assert_(PeriodIndex(data=l.get_xdata()).freq.startswith('W'))
+            self.assertTrue(PeriodIndex(data=l.get_xdata()).freq.startswith('W'))
 
     @slow
     def test_from_weekly_resampling(self):
@@ -691,7 +714,7 @@ class TestTSPlot(tm.TestCase):
         low.plot()
         ax = high.plot()
         for l in ax.get_lines():
-            self.assert_(PeriodIndex(data=l.get_xdata()).freq.startswith('W'))
+            self.assertTrue(PeriodIndex(data=l.get_xdata()).freq.startswith('W'))
 
     @slow
     def test_irreg_dtypes(self):
@@ -793,7 +816,7 @@ class TestTSPlot(tm.TestCase):
         self.assertEqual(leg.get_texts()[1].get_text(), 'B (right)')
         self.assertEqual(leg.get_texts()[2].get_text(), 'C')
         self.assertEqual(leg.get_texts()[3].get_text(), 'D')
-        self.assert_(ax.right_ax.get_legend() is None)
+        self.assertIsNone(ax.right_ax.get_legend())
         colors = set()
         for line in leg.get_lines():
             colors.add(line.get_color())
@@ -829,7 +852,7 @@ class TestTSPlot(tm.TestCase):
         ax = df.plot(secondary_y=['C', 'D'])
         leg = ax.get_legend()
         self.assertEqual(len(leg.get_lines()), 4)
-        self.assert_(ax.right_ax.get_legend() is None)
+        self.assertIsNone(ax.right_ax.get_legend())
         colors = set()
         for line in leg.get_lines():
             colors.add(line.get_color())
@@ -844,7 +867,7 @@ class TestTSPlot(tm.TestCase):
         ax = df.plot(secondary_y=['A', 'B'])
         leg = ax.get_legend()
         self.assertEqual(len(leg.get_lines()), 4)
-        self.assert_(ax.right_ax.get_legend() is None)
+        self.assertIsNone(ax.right_ax.get_legend())
         colors = set()
         for line in leg.get_lines():
             colors.add(line.get_color())
@@ -857,7 +880,7 @@ class TestTSPlot(tm.TestCase):
         ax = df.plot(secondary_y=['C', 'D'])
         leg = ax.get_legend()
         self.assertEqual(len(leg.get_lines()), 4)
-        self.assert_(ax.right_ax.get_legend() is None)
+        self.assertIsNone(ax.right_ax.get_legend())
         colors = set()
         for line in leg.get_lines():
             colors.add(line.get_color())

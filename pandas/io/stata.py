@@ -20,10 +20,10 @@ from pandas.core.series import Series
 from pandas.core.categorical import Categorical
 import datetime
 from pandas import compat
-from pandas.compat import long, lrange, lmap, lzip
+from pandas.compat import long, lrange, lmap, lzip, text_type, string_types
 from pandas import isnull
 from pandas.io.common import get_filepath_or_buffer
-
+from pandas.tslib import NaT
 
 def read_stata(filepath_or_buffer, convert_dates=True,
                convert_categoricals=True, encoding=None, index=None):
@@ -48,7 +48,7 @@ def read_stata(filepath_or_buffer, convert_dates=True,
 
     return reader.data(convert_dates, convert_categoricals, index)
 
-_date_formats = ["%tc", "%tC", "%td", "%tw", "%tm", "%tq", "%th", "%ty"]
+_date_formats = ["%tc", "%tC", "%td", "%d", "%tw", "%tm", "%tq", "%th", "%ty"]
 
 
 def _stata_elapsed_date_to_datetime(date, fmt):
@@ -97,8 +97,9 @@ def _stata_elapsed_date_to_datetime(date, fmt):
     # numpy types and numpy datetime isn't mature enough / we can't rely on
     # pandas version > 0.7.1
     #TODO: IIRC relative delta doesn't play well with np.datetime?
+    #TODO: When pandas supports more than datetime64[ns], this should be improved to use correct range, e.g. datetime[Y] for yearly
     if np.isnan(date):
-        return np.datetime64('nat')
+        return NaT
 
     date = int(date)
     stata_epoch = datetime.datetime(1960, 1, 1)
@@ -109,7 +110,7 @@ def _stata_elapsed_date_to_datetime(date, fmt):
         from warnings import warn
         warn("Encountered %tC format. Leaving in Stata Internal Format.")
         return date
-    elif fmt in ["%td", "td"]:
+    elif fmt in ["%td", "td", "%d", "d"]:
         return stata_epoch + datetime.timedelta(int(date))
     elif fmt in ["%tw", "tw"]:  # does not count leap days - 7 days is a week
         year = datetime.datetime(stata_epoch.year + date // 52, 1, 1)
@@ -150,6 +151,11 @@ def _datetime_to_stata_elapsed(date, fmt):
     if not isinstance(date, datetime.datetime):
         raise ValueError("date should be datetime.datetime format")
     stata_epoch = datetime.datetime(1960, 1, 1)
+    # Handle NaTs
+    if date is NaT:
+        # Missing value for dates ('.'), assumed always double
+        # TODO: Should be moved so a const somewhere, and consolidated
+        return struct.unpack('<d', b'\x00\x00\x00\x00\x00\x00\xe0\x7f')[0]
     if fmt in ["%tc", "tc"]:
         delta = date - stata_epoch
         return (delta.days * 86400000 + delta.seconds*1000 +
@@ -175,6 +181,77 @@ def _datetime_to_stata_elapsed(date, fmt):
         raise ValueError("fmt %s not understood" % fmt)
 
 
+class PossiblePrecisionLoss(Warning):
+    pass
+
+
+precision_loss_doc = """
+Column converted from %s to %s, and some data are outside of the lossless
+conversion range. This may result in a loss of precision in the saved data.
+"""
+
+
+class InvalidColumnName(Warning):
+    pass
+
+
+invalid_name_doc = """
+Not all pandas column names were valid Stata variable names.
+The following replacements have been made:
+
+    {0}
+
+If this is not what you expect, please make sure you have Stata-compliant
+column names in your DataFrame (strings only, max 32 characters, only alphanumerics and
+underscores, no Stata reserved words)
+"""
+
+def _cast_to_stata_types(data):
+    """Checks the dtypes of the columns of a pandas DataFrame for
+    compatibility with the data types and ranges supported by Stata, and
+    converts if necessary.
+
+    Parameters
+    ----------
+    data : DataFrame
+        The DataFrame to check and convert
+
+    Notes
+    -----
+    Numeric columns must be one of int8, int16, int32, float32 or float64, with
+    some additional value restrictions on the integer data types.  int8 and
+    int16 columns are checked for violations of the value restrictions and
+    upcast if needed.  int64 data is not usable in Stata, and so it is
+    downcast to int32 whenever the value are in the int32 range, and
+    sidecast to float64 when larger than this range.  If the int64 values
+    are outside of the range of those perfectly representable as float64 values,
+    a warning is raised.
+    """
+    ws = ''
+    for col in data:
+        dtype = data[col].dtype
+        if dtype == np.int8:
+            if data[col].max() > 100 or data[col].min() < -127:
+                data[col] = data[col].astype(np.int16)
+        elif dtype == np.int16:
+            if data[col].max() > 32740 or data[col].min() < -32767:
+                data[col] = data[col].astype(np.int32)
+        elif dtype == np.int64:
+            if data[col].max() <= 2147483620 and data[col].min() >= -2147483647:
+                data[col] = data[col].astype(np.int32)
+            else:
+                data[col] = data[col].astype(np.float64)
+                if data[col].max() <= 2 * 53 or data[col].min() >= -2 ** 53:
+                    ws = precision_loss_doc % ('int64', 'float64')
+
+    if ws:
+        import warnings
+
+        warnings.warn(ws, PossiblePrecisionLoss)
+
+    return data
+
+
 class StataMissingValue(StringMixin):
     """
     An observation's missing value.
@@ -193,14 +270,23 @@ class StataMissingValue(StringMixin):
     -----
     More information: <http://www.stata.com/help.cgi?missing>
     """
-
+    # TODO: Needs test
     def __init__(self, offset, value):
         self._value = value
-        if type(value) is int or type(value) is long:
-            self._str = value - offset is 1 and \
-                '.' or ('.' + chr(value - offset + 96))
+        value_type = type(value)
+        if value_type in int:
+            loc = value - offset
+        elif value_type in (float, np.float32, np.float64):
+            if value <= np.finfo(np.float32).max:  # float32
+                conv_str, byte_loc, scale = '<f', 1, 8
+            else:
+                conv_str, byte_loc, scale = '<d', 5, 1
+            value_bytes = struct.pack(conv_str, value)
+            loc = (struct.unpack('<b', value_bytes[byte_loc])[0] / scale) + 0
         else:
-            self._str = '.'
+            # Should never be hit
+            loc = 0
+        self._str = loc is 0 and '.' or ('.' + chr(loc + 96))
     string = property(lambda self: self._str,
                       doc="The Stata representation of the missing value: "
                           "'.', '.a'..'.z'")
@@ -240,9 +326,9 @@ class StataParser(object):
             dict(
                 lzip(range(1, 245), ['a' + str(i) for i in range(1, 245)]) +
                 [
-                    (251, np.int16),
-                    (252, np.int32),
-                    (253, np.int64),
+                    (251, np.int8),
+                    (252, np.int16),
+                    (253, np.int32),
                     (254, np.float32),
                     (255, np.float64)
                 ]
@@ -253,9 +339,9 @@ class StataParser(object):
                     (32768, np.string_),
                     (65526, np.float64),
                     (65527, np.float32),
-                    (65528, np.int64),
-                    (65529, np.int32),
-                    (65530, np.int16)
+                    (65528, np.int32),
+                    (65529, np.int16),
+                    (65530, np.int8)
                 ]
             )
         self.TYPE_MAP = lrange(251) + list('bhlfd')
@@ -272,13 +358,19 @@ class StataParser(object):
         #NOTE: technically, some of these are wrong. there are more numbers
         # that can be represented. it's the 27 ABOVE and BELOW the max listed
         # numeric data type in [U] 12.2.2 of the 11.2 manual
-        self.MISSING_VALUES = \
+        float32_min = b'\xff\xff\xff\xfe'
+        float32_max = b'\xff\xff\xff\x7e'
+        float64_min = b'\xff\xff\xff\xff\xff\xff\xef\xff'
+        float64_max = b'\xff\xff\xff\xff\xff\xff\xdf\x7f'
+        self.VALID_RANGE = \
             {
                 'b': (-127, 100),
                 'h': (-32767, 32740),
                 'l': (-2147483647, 2147483620),
-                'f': (-1.701e+38, +1.701e+38),
-                'd': (-1.798e+308, +8.988e+307)
+                'f': (np.float32(struct.unpack('<f', float32_min)[0]),
+                      np.float32(struct.unpack('<f', float32_max)[0])),
+                'd': (np.float64(struct.unpack('<d', float64_min)[0]),
+                      np.float64(struct.unpack('<d', float64_max)[0]))
             }
 
         self.OLD_TYPE_MAPPING = \
@@ -287,6 +379,28 @@ class StataParser(object):
                 'f': 254,
                 'b': 251
             }
+        # These missing values are the generic '.' in Stata, and are used
+        # to replace nans
+        self.MISSING_VALUES = \
+            {
+                'b': 101,
+                'h': 32741,
+                'l': 2147483621,
+                'f': np.float32(struct.unpack('<f', b'\x00\x00\x00\x7f')[0]),
+                'd': np.float64(struct.unpack('<d', b'\x00\x00\x00\x00\x00\x00\xe0\x7f')[0])
+            }
+
+        # Reserved words cannot be used as variable names
+        self.RESERVED_WORDS = ('aggregate', 'array', 'boolean', 'break',
+                               'byte', 'case', 'catch', 'class', 'colvector',
+                               'complex', 'const', 'continue', 'default',
+                               'delegate', 'delete', 'do', 'double', 'else',
+                               'eltypedef', 'end', 'enum', 'explicit',
+                               'export', 'external', 'float', 'for', 'friend',
+                               'function', 'global', 'goto', 'if', 'inline',
+                               'int', 'local', 'long', 'NULL', 'pragma',
+                               'protected', 'quad', 'rowvector', 'short',
+                               'typedef', 'typename', 'virtual')
 
     def _decode_bytes(self, str, errors=None):
         if compat.PY3 or self._encoding is not None:
@@ -362,10 +476,10 @@ class StataReader(StataParser):
                                       self.path_or_buf.read(4))[0]
             self.path_or_buf.read(11)  # </N><label>
             strlen = struct.unpack('b', self.path_or_buf.read(1))[0]
-            self.data_label = self.path_or_buf.read(strlen)
+            self.data_label = self._null_terminate(self.path_or_buf.read(strlen))
             self.path_or_buf.read(19)  # </label><timestamp>
             strlen = struct.unpack('b', self.path_or_buf.read(1))[0]
-            self.time_stamp = self.path_or_buf.read(strlen)
+            self.time_stamp = self._null_terminate(self.path_or_buf.read(strlen))
             self.path_or_buf.read(26)  # </timestamp></header><map>
             self.path_or_buf.read(8)  # 0x0000000000000000
             self.path_or_buf.read(8)  # position of <map>
@@ -447,7 +561,7 @@ class StataReader(StataParser):
                 raise ValueError("Version of given Stata file is not 104, "
                                  "105, 108, 113 (Stata 8/9), 114 (Stata "
                                  "10/11), 115 (Stata 12) or 117 (Stata 13)")
-            self.byteorder = self.path_or_buf.read(1) == 0x1 and '>' or '<'
+            self.byteorder = struct.unpack('b', self.path_or_buf.read(1))[0] == 0x1 and '>' or '<'
             self.filetype = struct.unpack('b', self.path_or_buf.read(1))[0]
             self.path_or_buf.read(1)  # unused
 
@@ -456,11 +570,11 @@ class StataReader(StataParser):
             self.nobs = struct.unpack(self.byteorder + 'I',
                                       self.path_or_buf.read(4))[0]
             if self.format_version > 105:
-                self.data_label = self.path_or_buf.read(81)
+                self.data_label = self._null_terminate(self.path_or_buf.read(81))
             else:
-                self.data_label = self.path_or_buf.read(32)
+                self.data_label = self._null_terminate(self.path_or_buf.read(32))
             if self.format_version > 104:
-                self.time_stamp = self.path_or_buf.read(18)
+                self.time_stamp = self._null_terminate(self.path_or_buf.read(18))
 
             # descriptors
             if self.format_version > 108:
@@ -556,8 +670,8 @@ class StataReader(StataParser):
 
     def _unpack(self, fmt, byt):
         d = struct.unpack(self.byteorder + fmt, byt)[0]
-        if fmt[-1] in self.MISSING_VALUES:
-            nmin, nmax = self.MISSING_VALUES[fmt[-1]]
+        if fmt[-1] in self.VALID_RANGE:
+            nmin, nmax = self.VALID_RANGE[fmt[-1]]
             if d < nmin or d > nmax:
                 if self._missing_values:
                     return StataMissingValue(nmax, d)
@@ -843,7 +957,7 @@ def _maybe_convert_to_int_keys(convert_dates, varlist):
         else:
             if not isinstance(key, int):
                 raise ValueError(
-                    "convery_dates key is not in varlist and is not an int"
+                    "convert_dates key is not in varlist and is not an int"
                 )
             new_dict.update({key: convert_dates[key]})
     return new_dict
@@ -855,11 +969,12 @@ def _dtype_to_stata_type(dtype):
     See TYPE_MAP and comments for an explanation. This is also explained in
     the dta spec.
     1 - 244 are strings of this length
-    251 - chr(251) - for int8 and int16, byte
-    252 - chr(252) - for int32, int
-    253 - chr(253) - for int64, long
-    254 - chr(254) - for float32, float
-    255 - chr(255) - double, double
+                         Pandas    Stata
+    251 - chr(251) - for int8      byte
+    252 - chr(252) - for int16     int
+    253 - chr(253) - for int32     long
+    254 - chr(254) - for float32   float
+    255 - chr(255) - for double    double
 
     If there are dates to convert, then dtype will already have the correct
     type inserted.
@@ -875,11 +990,11 @@ def _dtype_to_stata_type(dtype):
         return chr(255)
     elif dtype == np.float32:
         return chr(254)
-    elif dtype == np.int64:
-        return chr(253)
     elif dtype == np.int32:
+        return chr(253)
+    elif dtype == np.int16:
         return chr(252)
-    elif dtype == np.int8 or dtype == np.int16:
+    elif dtype == np.int8:
         return chr(251)
     else:  # pragma : no cover
         raise ValueError("Data type %s not currently understood. "
@@ -907,8 +1022,6 @@ def _dtype_to_default_stata_fmt(dtype):
     elif dtype == np.float64:
         return "%10.0g"
     elif dtype == np.float32:
-        return "%9.0g"
-    elif dtype == np.int64:
         return "%9.0g"
     elif dtype == np.int32:
         return "%12.0g"
@@ -939,6 +1052,11 @@ class StataWriter(StataParser):
     byteorder : str
         Can be ">", "<", "little", or "big". The default is None which uses
         `sys.byteorder`
+    time_stamp : datetime
+        A date time to use when writing the file.  Can be None, in which
+        case the current time is used.
+    dataset_label : str
+        A label for the data set.  Should be 80 characters or smaller.
 
     Returns
     -------
@@ -957,10 +1075,13 @@ class StataWriter(StataParser):
     >>> writer.write_file()
     """
     def __init__(self, fname, data, convert_dates=None, write_index=True,
-                 encoding="latin-1", byteorder=None):
+                 encoding="latin-1", byteorder=None, time_stamp=None,
+                 data_label=None):
         super(StataWriter, self).__init__(encoding)
         self._convert_dates = convert_dates
         self._write_index = write_index
+        self._time_stamp = time_stamp
+        self._data_label = data_label
         # attach nobs, nvars, data, varlist, typlist
         self._prepare_pandas(data)
 
@@ -970,7 +1091,7 @@ class StataWriter(StataParser):
         self._file = _open_file_binary_write(
             fname, self._encoding or self._default_encoding
         )
-        self.type_converters = {253: np.long, 252: int}
+        self.type_converters = {253: np.int32, 252: np.int16, 251: np.int8}
 
     def _write(self, to_write):
         """
@@ -982,6 +1103,93 @@ class StataWriter(StataParser):
         else:
             self._file.write(to_write)
 
+
+    def _replace_nans(self, data):
+        # return data
+        """Checks floating point data columns for nans, and replaces these with
+        the generic Stata for missing value (.)"""
+        for c in data:
+            dtype = data[c].dtype
+            if dtype in (np.float32, np.float64):
+                if dtype == np.float32:
+                    replacement = self.MISSING_VALUES['f']
+                else:
+                    replacement = self.MISSING_VALUES['d']
+                data[c] = data[c].fillna(replacement)
+
+        return data
+
+    def _check_column_names(self, data):
+        """Checks column names to ensure that they are valid Stata column names.
+        This includes checks for:
+            * Non-string names
+            * Stata keywords
+            * Variables that start with numbers
+            * Variables with names that are too long
+
+        When an illegal variable name is detected, it is converted, and if dates
+        are exported, the variable name is propogated to the date conversion
+        dictionary
+        """
+        converted_names = []
+        columns = list(data.columns)
+        original_columns = columns[:]
+
+        duplicate_var_id = 0
+        for j, name in enumerate(columns):
+            orig_name = name
+            if not isinstance(name, string_types):
+                name = text_type(name)
+
+            for c in name:
+                if (c < 'A' or c > 'Z') and (c < 'a' or c > 'z') and \
+                        (c < '0' or c > '9') and c != '_':
+                    name = name.replace(c, '_')
+
+            # Variable name must not be a reserved word
+            if name in self.RESERVED_WORDS:
+                name = '_' + name
+
+            # Variable name may not start with a number
+            if name[0] >= '0' and name[0] <= '9':
+                name = '_' + name
+
+            name = name[:min(len(name), 32)]
+
+            if not name == orig_name:
+                # check for duplicates
+                while columns.count(name) > 0:
+                    # prepend ascending number to avoid duplicates
+                    name = '_' + str(duplicate_var_id) + name
+                    name = name[:min(len(name), 32)]
+                    duplicate_var_id += 1
+
+                # need to possibly encode the orig name if its unicode
+                try:
+                    orig_name = orig_name.encode('utf-8')
+                except:
+                    pass
+                converted_names.append('{0}   ->   {1}'.format(orig_name, name))
+
+            columns[j] = name
+
+        data.columns = columns
+
+        # Check date conversion, and fix key if needed
+        if self._convert_dates:
+            for c, o in zip(columns, original_columns):
+                if c != o:
+                    self._convert_dates[c] = self._convert_dates[o]
+                    del self._convert_dates[o]
+
+        if converted_names:
+            import warnings
+
+            ws = invalid_name_doc.format('\n    '.join(converted_names))
+            warnings.warn(ws, InvalidColumnName)
+
+        return data
+
     def _prepare_pandas(self, data):
         #NOTE: we might need a different API / class for pandas objects so
         # we can set different semantics - handle this with a PR to pandas.io
@@ -990,11 +1198,18 @@ class StataWriter(StataParser):
                 self.data = data
 
             def __iter__(self):
-                for i, row in data.iterrows():
-                    yield row
+                for row in data.itertuples():
+                    # First element is index, so remove
+                    yield row[1:]
 
         if self._write_index:
             data = data.reset_index()
+        # Check columns for compatibility with stata
+        data = _cast_to_stata_types(data)
+        # Ensure column names are strings
+        data = self._check_column_names(data)
+        # Replace NaNs with Stata missing values
+        data = self._replace_nans(data)
         self.datarows = DataFrameRowIter(data)
         self.nobs, self.nvar = data.shape
         self.data = data
@@ -1017,7 +1232,8 @@ class StataWriter(StataParser):
                 self.fmtlist[key] = self._convert_dates[key]
 
     def write_file(self):
-        self._write_header()
+        self._write_header(time_stamp=self._time_stamp,
+                           data_label=self._data_label)
         self._write_descriptors()
         self._write_variable_labels()
         # write 5 zeros for expansion fields
@@ -1054,7 +1270,7 @@ class StataWriter(StataParser):
         # format dd Mon yyyy hh:mm
         if time_stamp is None:
             time_stamp = datetime.datetime.now()
-        elif not isinstance(time_stamp, datetime):
+        elif not isinstance(time_stamp, datetime.datetime):
             raise ValueError("time_stamp should be datetime type")
         self._file.write(
             self._null_terminate(time_stamp.strftime("%d %b %Y %H:%M"))
@@ -1067,55 +1283,12 @@ class StataWriter(StataParser):
         for typ in self.typlist:
             self._write(typ)
 
-        # varlist, length 33*nvar, char array, null terminated
-        converted_names = []
-        duplicate_var_id = 0
-        for j, name in enumerate(self.varlist):
-            orig_name = name
-            # Replaces all characters disallowed in .dta format by their integral representation.
-            for c in name:
-                if (c < 'A' or c > 'Z') and (c < 'a' or c > 'z') and (c < '0' or c > '9') and c != '_':
-                    name = name.replace(c, '_')
-
-            # Variable name may not start with a number
-            if name[0] > '0' and name[0] < '9':
-                name = '_' + name
-
-            name = name[:min(len(name), 32)]
-
-            if not name == orig_name:
-                # check for duplicates
-                while self.varlist.count(name) > 0:
-                    # prepend ascending number to avoid duplicates
-                    name = '_' + str(duplicate_var_id) + name
-                    name = name[:min(len(name), 32)]
-                    duplicate_var_id += 1
-
-                # need to possibly encode the orig name if its unicode
-                try:
-                    orig_name = orig_name.encode('utf-8')
-                except:
-                    pass
-
-                converted_names.append('{0}    ->    {1}'.format(orig_name, name))
-                self.varlist[j] = name
-
+        # varlist names are checked by _check_column_names
+        # varlist, requires null terminated
         for name in self.varlist:
             name = self._null_terminate(name, True)
             name = _pad_bytes(name[:32], 33)
             self._write(name)
-
-        if converted_names:
-            from warnings import warn
-            warn("""Not all pandas column names were valid Stata variable names.
-                Made the following replacements:
-
-                    {0}
-
-                If this is not what you expect, please make sure you have Stata-compliant
-                column names in your DataFrame (max 32 characters, only alphanumerics and
-                underscores)/
-                """.format('\n    '.join(converted_names)))
 
         # srtlist, 2*(nvar+1), int array, encoded by byteorder
         srtlist = _pad_bytes("", (2*(nvar+1)))
@@ -1146,6 +1319,8 @@ class StataWriter(StataParser):
             for i, var in enumerate(row):
                 typ = ord(typlist[i])
                 if typ <= 244:  # we've got a string
+                    if var is None or var == np.nan:
+                        var = _pad_bytes('', typ)
                     if len(var) < typ:
                         var = _pad_bytes(var, typ)
                     self._write(var)
@@ -1180,8 +1355,6 @@ class StataWriter(StataParser):
                         var = _pad_bytes(var, typ)
                     self._write(var)
                 else:
-                    if isnull(var):  # this only matters for floats
-                        var = MISSING_VALUES[typ]
                     self._file.write(struct.pack(byteorder+TYPE_MAP[typ], var))
 
     def _null_terminate(self, s, as_string=False):

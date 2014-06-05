@@ -11,6 +11,7 @@
    np.random.seed(123456)
    from pandas import *
    options.display.max_rows=15
+   options.display.mpl_style='default'
    import pandas as pd
    randn = np.random.randn
    randint = np.random.randint
@@ -20,7 +21,7 @@
 Cookbook
 ********
 
-This is a respository for *short and sweet* examples and links for useful pandas recipes.
+This is a repository for *short and sweet* examples and links for useful pandas recipes.
 We encourage users to add to this documentation.
 
 This is a great *First Pull Request* (to add interesting links and/or put short code inline
@@ -45,8 +46,12 @@ These are some neat pandas ``idioms``
 `How to select from a frame with complex criteria?
 <http://stackoverflow.com/questions/15315452/selecting-with-complex-criteria-from-pandas-dataframe>`__
 
-`Select rows closest to a user defined numer
+`Select rows closest to a user-defined number
 <http://stackoverflow.com/questions/17758023/return-rows-in-a-dataframe-closest-to-a-user-defined-number>`__
+
+`How to reduce a sequence (e.g. of Series) using a binary operator
+<http://stackoverflow.com/questions/21058254/pandas-boolean-operation-in-a-python-list/21058331>`__
+
 
 .. _cookbook.selection:
 
@@ -55,27 +60,26 @@ Selection
 
 The :ref:`indexing <indexing>` docs.
 
-Indexing using both row labels and conditionals, see
-`here
+`Indexing using both row labels and conditionals
 <http://stackoverflow.com/questions/14725068/pandas-using-row-labels-in-boolean-indexing>`__
 
-Use loc for label-oriented slicing and iloc positional slicing, see
-`here <https://github.com/pydata/pandas/issues/2904>`__
+`Use loc for label-oriented slicing and iloc positional slicing
+<https://github.com/pydata/pandas/issues/2904>`__
 
-Extend a panel frame by transposing, adding a new dimension, and transposing back to the original dimensions, see
-`here
+`Extend a panel frame by transposing, adding a new dimension, and transposing back to the original dimensions
 <http://stackoverflow.com/questions/15364050/extending-a-pandas-panel-frame-along-the-minor-axis>`__
 
-Mask a panel by using ``np.where`` and then reconstructing the panel with the new masked values
-`here
+`Mask a panel by using np.where and then reconstructing the panel with the new masked values
 <http://stackoverflow.com/questions/14650341/boolean-mask-in-pandas-panel>`__
 
-Using ``~`` to take the complement of a boolean array, see
-`here
+`Using ~ to take the complement of a boolean array, see
 <http://stackoverflow.com/questions/14986510/picking-out-elements-based-on-complement-of-indices-in-python-pandas>`__
 
 `Efficiently creating columns using applymap
 <http://stackoverflow.com/questions/16575868/efficiently-creating-additional-columns-in-a-pandas-dataframe-using-map>`__
+
+`Keep other columns when using min() with groupby
+<http://stackoverflow.com/questions/23394476/keep-other-columns-when-using-min-with-groupby>`__
 
 .. _cookbook.multi_index:
 
@@ -90,7 +94,7 @@ The :ref:`multindexing <indexing.hierarchical>` docs.
 Arithmetic
 ~~~~~~~~~~
 
-`Performing arithmetic with a multi-index that needs broadcastin
+`Performing arithmetic with a multi-index that needs broadcasting
 <http://stackoverflow.com/questions/19501510/divide-entire-pandas-multiindex-dataframe-by-dataframe-variable/19502176#19502176>`__
 
 Slicing
@@ -187,6 +191,19 @@ The :ref:`grouping <groupby>` docs.
 `Create a value counts column and reassign back to the DataFrame
 <http://stackoverflow.com/questions/17709270/i-want-to-create-a-column-of-value-counts-in-my-pandas-dataframe>`__
 
+`Shift groups of the values in a column based on the index
+<http://stackoverflow.com/q/23198053/190597>`__
+
+.. ipython:: python
+
+   df = pd.DataFrame(
+        {u'line_race': [10L, 10L, 8L, 10L, 10L, 8L],
+         u'beyer': [99L, 102L, 103L, 103L, 88L, 100L]},
+        index=[u'Last Gunfighter', u'Last Gunfighter', u'Last Gunfighter',
+               u'Paynter', u'Paynter', u'Paynter']); df
+
+   df['beyer_shifted'] = df.groupby(level=0)['beyer'].shift(1)
+   df
 
 Expanding Data
 ~~~~~~~~~~~~~~
@@ -221,8 +238,14 @@ The :ref:`Pivot <reshaping.pivot>` docs.
 Apply
 ~~~~~
 
-`Turning embeded lists into a multi-index frame
+`Turning embedded lists into a multi-index frame
 <http://stackoverflow.com/questions/17349981/converting-pandas-dataframe-with-categorical-values-into-binary-values>`__
+
+`Rolling apply with a DataFrame returning a Series
+<http://stackoverflow.com/questions/19121854/using-rolling-apply-on-a-dataframe-object>`__
+
+`Rolling apply with a DataFrame returning a Scalar
+<http://stackoverflow.com/questions/21040766/python-pandas-rolling-apply-two-column-input-into-function/21045831#21045831>`__
 
 Timeseries
 ----------
@@ -233,12 +256,18 @@ Timeseries
 `Using indexer between time
 <http://stackoverflow.com/questions/17559885/pandas-dataframe-mask-based-on-index>`__
 
+`Constructing a datetime range that excludes weekends and includes only certain times
+<http://stackoverflow.com/questions/24010830/pandas-generate-sequential-timestamp-with-jump/24014440#24014440?>`__
+
 `Vectorized Lookup
 <http://stackoverflow.com/questions/13893227/vectorized-look-up-of-values-in-pandas-dataframe>`__
 
-Turn a matrix with hours in columns and days in rows into a continous row sequence in the form of a time series.
-`How to rearrange a python pandas dataframe?
+Turn a matrix with hours in columns and days in rows into a continuous row sequence in the form of a time series.
+`How to rearrange a python pandas DataFrame?
 <http://stackoverflow.com/questions/15432659/how-to-rearrange-a-python-pandas-dataframe>`__
+
+`Dealing with duplicates when reindexing a timeseries to a specified frequency
+<http://stackoverflow.com/questions/22244383/pandas-df-refill-adding-two-columns-of-different-shape>`__
 
 .. _cookbook.resample:
 
@@ -317,6 +346,28 @@ The :ref:`Plotting <visualization>` docs.
 `Annotate a time-series plot #2
 <http://stackoverflow.com/questions/17891493/annotating-points-from-a-pandas-dataframe-in-matplotlib-plot>`__
 
+`Generate Embedded plots in excel files using Pandas, Vincent and xlsxwriter
+<http://pandas-xlsxwriter-charts.readthedocs.org/en/latest/introduction.html>`__
+
+`Boxplot for each quartile of a stratifying variable
+<http://stackoverflow.com/questions/23232989/boxplot-stratified-by-column-in-python-pandas>`__
+
+.. ipython:: python
+
+    df = pd.DataFrame(
+        {u'stratifying_var': np.random.uniform(0, 100, 20),
+         u'price': np.random.normal(100, 5, 20)}
+    )
+    df[u'quartiles'] = pd.qcut(
+        df[u'stratifying_var'],
+        4,
+        labels=[u'0-25%', u'25-50%', u'50-75%', u'75-100%']
+    )
+
+    @savefig quartile_boxplot.png
+    df.boxplot(column=u'price', by=u'quartiles')
+
+
 Data In/Out
 -----------
 
@@ -344,7 +395,7 @@ The :ref:`CSV <io.read_csv_table>` docs
 `Reading the first few lines of a frame
 <http://stackoverflow.com/questions/15008970/way-to-read-first-few-lines-for-pandas-dataframe>`__
 
-Reading a file that is compressed but not by ``gzip/bz2`` (the native compresed formats which ``read_csv`` understands).
+Reading a file that is compressed but not by ``gzip/bz2`` (the native compressed formats which ``read_csv`` understands).
 This example shows a ``WinZipped`` file, but is a general application of opening the file within a context manager and
 using that handle to read.
 `See here
@@ -357,13 +408,48 @@ using that handle to read.
 <http://github.com/pydata/pandas/issues/2886>`__
 
 `Dealing with bad lines II
-<http://nipunbatra.wordpress.com/2013/06/06/reading-unclean-data-csv-using-pandas/>`__
+<http://nipunbatra.github.io/2013/06/reading-unclean-data-csv-using-pandas/>`__
 
 `Reading CSV with Unix timestamps and converting to local timezone
-<http://nipunbatra.wordpress.com/2013/06/07/pandas-reading-csv-with-unix-timestamps-and-converting-to-local-timezone/>`__
+<http://nipunbatra.github.io/2013/06/pandas-reading-csv-with-unix-timestamps-and-converting-to-local-timezone/>`__
 
 `Write a multi-row index CSV without writing duplicates
 <http://stackoverflow.com/questions/17349574/pandas-write-multiindex-rows-with-to-csv>`__
+
+Parsing date components in multi-columns is faster with a format
+
+.. code-block:: python
+
+    In [30]: i = pd.date_range('20000101',periods=10000)
+
+    In [31]: df = pd.DataFrame(dict(year = i.year, month = i.month, day = i.day))
+
+    In [32]: df.head()
+    Out[32]:
+       day  month  year
+    0    1      1  2000
+    1    2      1  2000
+    2    3      1  2000
+    3    4      1  2000
+    4    5      1  2000
+
+    In [33]: %timeit pd.to_datetime(df.year*10000+df.month*100+df.day,format='%Y%m%d')
+    100 loops, best of 3: 7.08 ms per loop
+
+    # simulate combinging into a string, then parsing
+    In [34]: ds = df.apply(lambda x: "%04d%02d%02d" % (x['year'],x['month'],x['day']),axis=1)
+
+    In [35]: ds.head()
+    Out[35]:
+    0    20000101
+    1    20000102
+    2    20000103
+    3    20000104
+    4    20000105
+    dtype: object
+
+    In [36]: %timeit pd.to_datetime(ds)
+    1 loops, best of 3: 488 ms per loop
 
 .. _cookbook.sql:
 
@@ -400,13 +486,13 @@ The :ref:`HDFStores <io.hdf5>` docs
 `Simple Queries with a Timestamp Index
 <http://stackoverflow.com/questions/13926089/selecting-columns-from-pandas-hdfstore-table>`__
 
-`Managing heteregenous data using a linked multiple table hierarchy
+`Managing heterogeneous data using a linked multiple table hierarchy
 <http://github.com/pydata/pandas/issues/3032>`__
 
 `Merging on-disk tables with millions of rows
 <http://stackoverflow.com/questions/14614512/merging-two-tables-with-millions-of-rows-in-python/14617925#14617925>`__
 
-Deduplicating a large store by chunks, essentially a recusive reduction operation. Shows a function for taking in data from
+Deduplicating a large store by chunks, essentially a recursive reduction operation. Shows a function for taking in data from
 csv file and creating a store by chunks, with date parsing as well.
 `See here
 <http://stackoverflow.com/questions/16110252/need-to-compare-very-large-files-around-1-5gb-in-python/16110391#16110391>`__
@@ -425,6 +511,9 @@ csv file and creating a store by chunks, with date parsing as well.
 
 `Groupby on a HDFStore
 <http://stackoverflow.com/questions/15798209/pandas-group-by-query-on-large-data-in-hdfstore>`__
+
+`Hierarchical queries on a HDFStore
+<http://stackoverflow.com/questions/22777284/improve-query-performance-from-a-large-hdfstore-table-with-pandas/22820780#22820780>`__
 
 `Counting with a HDFStore
 <http://stackoverflow.com/questions/20497897/converting-dict-of-dicts-into-pandas-dataframe-memory-issues>`__
@@ -455,6 +544,75 @@ Storing Attributes to a group node
 
     store.close()
     os.remove('test.h5')
+
+
+.. _cookbook.binary:
+
+Binary Files
+~~~~~~~~~~~~
+
+pandas readily accepts numpy record arrays, if you need to read in a binary
+file consisting of an array of C structs. For example, given this C program
+in a file called ``main.c`` compiled with ``gcc main.c -std=gnu99`` on a
+64-bit machine,
+
+.. code-block:: c
+
+   #include <stdio.h>
+   #include <stdint.h>
+
+   typedef struct _Data
+   {
+       int32_t count;
+       double avg;
+       float scale;
+   } Data;
+
+   int main(int argc, const char *argv[])
+   {
+       size_t n = 10;
+       Data d[n];
+
+       for (int i = 0; i < n; ++i)
+       {
+           d[i].count = i;
+           d[i].avg = i + 1.0;
+           d[i].scale = (float) i + 2.0f;
+       }
+
+       FILE *file = fopen("binary.dat", "wb");
+       fwrite(&d, sizeof(Data), n, file);
+       fclose(file);
+
+       return 0;
+   }
+
+the following Python code will read the binary file ``'binary.dat'`` into a
+pandas ``DataFrame``, where each element of the struct corresponds to a column
+in the frame:
+
+.. code-block:: python
+
+   import numpy as np
+   from pandas import DataFrame
+
+   names = 'count', 'avg', 'scale'
+
+   # note that the offsets are larger than the size of the type because of
+   # struct padding
+   offsets = 0, 8, 16
+   formats = 'i4', 'f8', 'f4'
+   dt = np.dtype({'names': names, 'offsets': offsets, 'formats': formats},
+                 align=True)
+   df = DataFrame(np.fromfile('binary.dat', dt))
+
+.. note::
+
+   The offsets of the structure elements may be different depending on the
+   architecture of the machine on which the file was created. Using a raw
+   binary file format like this for general data storage is not recommended, as
+   it is not cross platform. We recommended either HDF5 or msgpack, both of
+   which are supported by pandas' IO facilities.
 
 Computation
 -----------

@@ -61,26 +61,28 @@ def _create_methods(arith_method, radd_func, comp_method, bool_method,
                               default_axis=default_axis, fill_zeros=np.inf),
         # Causes a floating point exception in the tests when numexpr
         # enabled, so for now no speedup
-        mod=arith_method(operator.mod, names('mod'), default_axis=default_axis,
-                         fill_zeros=np.nan),
+        mod=arith_method(operator.mod, names('mod'), None,
+                         default_axis=default_axis, fill_zeros=np.nan),
         pow=arith_method(operator.pow, names('pow'), op('**'),
                          default_axis=default_axis),
         # not entirely sure why this is necessary, but previously was included
         # so it's here to maintain compatibility
-        rmul=arith_method(operator.mul, names('rmul'),
-                          default_axis=default_axis),
-        rsub=arith_method(lambda x, y: y - x, names('rsub'),
-                          default_axis=default_axis),
+        rmul=arith_method(operator.mul, names('rmul'), op('*'),
+                          default_axis=default_axis, reversed=True),
+        rsub=arith_method(lambda x, y: y - x, names('rsub'), op('-'),
+                          default_axis=default_axis, reversed=True),
         rtruediv=arith_method(lambda x, y: operator.truediv(y, x),
-                              names('rtruediv'), truediv=True,
-                              fill_zeros=np.inf, default_axis=default_axis),
+                              names('rtruediv'), op('/'), truediv=True,
+                              fill_zeros=np.inf, default_axis=default_axis,
+                              reversed=True),
         rfloordiv=arith_method(lambda x, y: operator.floordiv(y, x),
-                               names('rfloordiv'), default_axis=default_axis,
-                               fill_zeros=np.inf),
-        rpow=arith_method(lambda x, y: y ** x, names('rpow'),
-                          default_axis=default_axis),
-        rmod=arith_method(lambda x, y: y % x, names('rmod'),
-                          default_axis=default_axis),
+                               names('rfloordiv'), op('//'),
+                               default_axis=default_axis, fill_zeros=np.inf,
+                               reversed=True),
+        rpow=arith_method(lambda x, y: y ** x, names('rpow'), op('**'),
+                          default_axis=default_axis, reversed=True),
+        rmod=arith_method(lambda x, y: y % x, names('rmod'), op('%'),
+                          default_axis=default_axis, reversed=True),
     )
     new_methods['div'] = new_methods['truediv']
     new_methods['rdiv'] = new_methods['rtruediv']
@@ -100,11 +102,11 @@ def _create_methods(arith_method, radd_func, comp_method, bool_method,
             and_=bool_method(operator.and_, names('and_'), op('&')),
             or_=bool_method(operator.or_, names('or_'), op('|')),
             # For some reason ``^`` wasn't used in original.
-            xor=bool_method(operator.xor, names('xor')),
+            xor=bool_method(operator.xor, names('xor'), op('^')),
             rand_=bool_method(lambda x, y: operator.and_(y, x),
-                              names('rand_')),
-            ror_=bool_method(lambda x, y: operator.or_(y, x), names('ror_')),
-            rxor=bool_method(lambda x, y: operator.xor(y, x), names('rxor'))
+                              names('rand_'), op('&')),
+            ror_=bool_method(lambda x, y: operator.or_(y, x), names('ror_'), op('|')),
+            rxor=bool_method(lambda x, y: operator.xor(y, x), names('rxor'), op('^'))
         ))
 
     new_methods = dict((names(k), v) for k, v in new_methods.items())
@@ -331,7 +333,7 @@ class _TimeOp(object):
                 values = values.to_series()
         elif inferred_type in ('timedelta', 'timedelta64'):
             # have a timedelta, convert to to ns here
-            values = _possibly_cast_to_timedelta(values, coerce=coerce)
+            values = _possibly_cast_to_timedelta(values, coerce=coerce, dtype='timedelta64[ns]')
         elif inferred_type == 'integer':
             # py3 compat where dtype is 'm' but is an integer
             if values.dtype.kind == 'm':
@@ -431,7 +433,7 @@ class _TimeOp(object):
         return cls(left, right, name)
 
 
-def _arith_method_SERIES(op, name, str_rep=None, fill_zeros=None,
+def _arith_method_SERIES(op, name, str_rep, fill_zeros=None,
                          default_axis=None, **eval_kwargs):
     """
     Wrapper function for Series arithmetic operations, to avoid
@@ -452,9 +454,9 @@ def _arith_method_SERIES(op, name, str_rep=None, fill_zeros=None,
                 mask = notnull(x)
                 result[mask] = op(x[mask], y)
 
-            result, changed = com._maybe_upcast_putmask(result, -mask, pa.NA)
+            result, changed = com._maybe_upcast_putmask(result, ~mask, pa.NA)
 
-        result = com._fill_zeros(result, y, fill_zeros)
+        result = com._fill_zeros(result, x, y, name, fill_zeros)
         return result
 
     def wrapper(left, right, name=name):
@@ -476,16 +478,15 @@ def _arith_method_SERIES(op, name, str_rep=None, fill_zeros=None,
             wrap_results = time_converted.wrap_results
 
         if isinstance(rvalues, pd.Series):
-            join_idx, lidx, ridx = left.index.join(rvalues.index, how='outer',
-                                                   return_indexers=True)
-            rindex = rvalues.index
+            rindex = getattr(rvalues,'index',rvalues)
             name = _maybe_match_name(left, rvalues)
             lvalues = getattr(lvalues, 'values', lvalues)
             rvalues = getattr(rvalues, 'values', rvalues)
             if left.index.equals(rindex):
                 index = left.index
             else:
-                index = join_idx
+                index, lidx, ridx = left.index.join(rindex, how='outer',
+                                                       return_indexers=True)
 
                 if lidx is not None:
                     lvalues = com.take_1d(lvalues, lidx)
@@ -507,7 +508,7 @@ def _arith_method_SERIES(op, name, str_rep=None, fill_zeros=None,
     return wrapper
 
 
-def _comp_method_SERIES(op, name, str_rep=None, masker=False):
+def _comp_method_SERIES(op, name, str_rep, masker=False):
     """
     Wrapper function for Series arithmetic operations, to avoid
     code duplication.
@@ -579,7 +580,7 @@ def _comp_method_SERIES(op, name, str_rep=None, masker=False):
     return wrapper
 
 
-def _bool_method_SERIES(op, name, str_rep=None):
+def _bool_method_SERIES(op, name, str_rep):
     """
     Wrapper function for Series arithmetic operations, to avoid
     code duplication.
@@ -648,7 +649,7 @@ def _radd_compat(left, right):
     return output
 
 
-def _flex_method_SERIES(op, name, str_rep=None, default_axis=None,
+def _flex_method_SERIES(op, name, str_rep, default_axis=None,
                         fill_zeros=None, **eval_kwargs):
     doc = """
     Binary operator %s with support to substitute a fill_value for missing data
@@ -736,16 +737,21 @@ def _arith_method_FRAME(op, name, str_rep=None, default_axis='columns',
                 result = np.empty(x.size, dtype=dtype)
                 yrav = y.ravel()
                 mask = notnull(xrav) & notnull(yrav)
-                result[mask] = op(xrav[mask], yrav[mask])
+                xrav = xrav[mask]
+                yrav = yrav[mask]
+                if np.prod(xrav.shape) and np.prod(yrav.shape):
+                    result[mask] = op(xrav, yrav)
             else:
                 result = np.empty(x.size, dtype=x.dtype)
                 mask = notnull(xrav)
-                result[mask] = op(xrav[mask], y)
+                xrav = xrav[mask]
+                if np.prod(xrav.shape):
+                    result[mask] = op(xrav, y)
 
-            result, changed = com._maybe_upcast_putmask(result, -mask, np.nan)
+            result, changed = com._maybe_upcast_putmask(result, ~mask, np.nan)
             result = result.reshape(x.shape)
 
-        result = com._fill_zeros(result, y, fill_zeros)
+        result = com._fill_zeros(result, x, y, name, fill_zeros)
 
         return result
 
@@ -813,9 +819,9 @@ def _flex_comp_method_FRAME(op, name, str_rep=None, default_axis='columns',
                 result[mask] = op(np.array(list(xrav[mask])), y)
 
             if op == operator.ne:  # pragma: no cover
-                np.putmask(result, -mask, True)
+                np.putmask(result, ~mask, True)
             else:
-                np.putmask(result, -mask, False)
+                np.putmask(result, ~mask, False)
             result = result.reshape(x.shape)
 
         return result
@@ -907,9 +913,9 @@ def _arith_method_PANEL(op, name, str_rep=None, fill_zeros=None,
             result = pa.empty(len(x), dtype=x.dtype)
             mask = notnull(x)
             result[mask] = op(x[mask], y)
-            result, changed = com._maybe_upcast_putmask(result, -mask, pa.NA)
+            result, changed = com._maybe_upcast_putmask(result, ~mask, pa.NA)
 
-        result = com._fill_zeros(result, y, fill_zeros)
+        result = com._fill_zeros(result, x, y, name, fill_zeros)
         return result
 
     # work only for scalars
@@ -943,9 +949,9 @@ def _comp_method_PANEL(op, name, str_rep=None, masker=False):
                 result[mask] = op(np.array(list(xrav[mask])), y)
 
             if op == operator.ne:  # pragma: no cover
-                np.putmask(result, -mask, True)
+                np.putmask(result, ~mask, True)
             else:
-                np.putmask(result, -mask, False)
+                np.putmask(result, ~mask, False)
             result = result.reshape(x.shape)
 
         return result

@@ -7,6 +7,7 @@ cimport cython
 import_array()
 
 cdef float64_t FP_ERR = 1e-13
+cdef float64_t REL_TOL = 1e-07
 
 cimport util
 
@@ -19,6 +20,9 @@ from numpy cimport NPY_INT64 as NPY_int64
 from numpy cimport NPY_FLOAT16 as NPY_float16
 from numpy cimport NPY_FLOAT32 as NPY_float32
 from numpy cimport NPY_FLOAT64 as NPY_float64
+
+from numpy cimport (int8_t, int16_t, int32_t, int64_t, uint8_t, uint16_t,
+                    uint32_t, uint64_t, float16_t, float32_t, float64_t)
 
 int8 = np.dtype(np.int8)
 int16 = np.dtype(np.int16)
@@ -68,12 +72,14 @@ cdef:
     int TIEBREAK_MAX = 2
     int TIEBREAK_FIRST = 3
     int TIEBREAK_FIRST_DESCENDING = 4
+    int TIEBREAK_DENSE = 5
 
 tiebreakers = {
     'average' : TIEBREAK_AVERAGE,
     'min' : TIEBREAK_MIN,
     'max' : TIEBREAK_MAX,
-    'first' : TIEBREAK_FIRST
+    'first' : TIEBREAK_FIRST,
+    'dense' : TIEBREAK_DENSE,
 }
 
 
@@ -130,20 +136,33 @@ cdef _take_2d_object(ndarray[object, ndim=2] values,
     return result
 
 
+cdef inline bint float64_are_diff(float64_t left, float64_t right):
+    cdef double abs_diff, allowed
+    if right == MAXfloat64 or right == -MAXfloat64:
+        if left == right:
+            return False
+        else:
+            return True
+    else:
+        abs_diff = fabs(left - right)
+        allowed = REL_TOL * fabs(right)
+        return abs_diff > allowed
+
 def rank_1d_float64(object in_arr, ties_method='average', ascending=True,
-                    na_option='keep'):
+                    na_option='keep', pct=False):
     """
     Fast NaN-friendly version of scipy.stats.rankdata
     """
 
     cdef:
-        Py_ssize_t i, j, n, dups = 0
+        Py_ssize_t i, j, n, dups = 0, total_tie_count = 0
         ndarray[float64_t] sorted_data, ranks, values
         ndarray[int64_t] argsorted
         float64_t val, nan_value
         float64_t sum_ranks = 0
         int tiebreak = 0
         bint keep_na = 0
+        float count = 0.0
     tiebreak = tiebreakers[ties_method]
 
     values = np.asarray(in_arr).copy()
@@ -182,7 +201,8 @@ def rank_1d_float64(object in_arr, ties_method='average', ascending=True,
         if (val == nan_value) and keep_na:
             ranks[argsorted[i]] = nan
             continue
-        if i == n - 1 or fabs(sorted_data[i + 1] - val) > FP_ERR:
+        count += 1.0
+        if i == n - 1 or float64_are_diff(sorted_data[i + 1], val):
             if tiebreak == TIEBREAK_AVERAGE:
                 for j in range(i - dups + 1, i + 1):
                     ranks[argsorted[j]] = sum_ranks / dups
@@ -198,24 +218,32 @@ def rank_1d_float64(object in_arr, ties_method='average', ascending=True,
             elif tiebreak == TIEBREAK_FIRST_DESCENDING:
                 for j in range(i - dups + 1, i + 1):
                     ranks[argsorted[j]] = 2 * i - j - dups + 2
+            elif tiebreak == TIEBREAK_DENSE:
+                total_tie_count += 1
+                for j in range(i - dups + 1, i + 1):
+                    ranks[argsorted[j]] = total_tie_count
             sum_ranks = dups = 0
-    return ranks
+    if pct:
+        return ranks / count
+    else:
+        return ranks
 
 
 def rank_1d_int64(object in_arr, ties_method='average', ascending=True,
-                  na_option='keep'):
+                  na_option='keep', pct=False):
     """
     Fast NaN-friendly version of scipy.stats.rankdata
     """
 
     cdef:
-        Py_ssize_t i, j, n, dups = 0
+        Py_ssize_t i, j, n, dups = 0, total_tie_count = 0
         ndarray[int64_t] sorted_data, values
         ndarray[float64_t] ranks
         ndarray[int64_t] argsorted
         int64_t val
         float64_t sum_ranks = 0
         int tiebreak = 0
+        float count = 0.0
     tiebreak = tiebreakers[ties_method]
 
     values = np.asarray(in_arr)
@@ -242,6 +270,7 @@ def rank_1d_int64(object in_arr, ties_method='average', ascending=True,
         sum_ranks += i + 1
         dups += 1
         val = sorted_data[i]
+        count += 1.0
         if i == n - 1 or fabs(sorted_data[i + 1] - val) > 0:
             if tiebreak == TIEBREAK_AVERAGE:
                 for j in range(i - dups + 1, i + 1):
@@ -258,24 +287,32 @@ def rank_1d_int64(object in_arr, ties_method='average', ascending=True,
             elif tiebreak == TIEBREAK_FIRST_DESCENDING:
                 for j in range(i - dups + 1, i + 1):
                     ranks[argsorted[j]] = 2 * i - j - dups + 2
+            elif tiebreak == TIEBREAK_DENSE:
+                total_tie_count += 1
+                for j in range(i - dups + 1, i + 1):
+                    ranks[argsorted[j]] = total_tie_count
             sum_ranks = dups = 0
-    return ranks
+    if pct:
+        return ranks / count
+    else:
+        return ranks
 
 
 def rank_2d_float64(object in_arr, axis=0, ties_method='average',
-                    ascending=True, na_option='keep'):
+                    ascending=True, na_option='keep', pct=False):
     """
     Fast NaN-friendly version of scipy.stats.rankdata
     """
 
     cdef:
-        Py_ssize_t i, j, z, k, n, dups = 0
+        Py_ssize_t i, j, z, k, n, dups = 0, total_tie_count = 0
         ndarray[float64_t, ndim=2] ranks, values
         ndarray[int64_t, ndim=2] argsorted
         float64_t val, nan_value
         float64_t sum_ranks = 0
         int tiebreak = 0
         bint keep_na = 0
+        float count = 0.0
 
     tiebreak = tiebreakers[ties_method]
 
@@ -314,6 +351,8 @@ def rank_2d_float64(object in_arr, axis=0, ties_method='average',
 
     for i in range(n):
         dups = sum_ranks = 0
+        total_tie_count = 0
+        count = 0.0
         for j in range(k):
             sum_ranks += j + 1
             dups += 1
@@ -321,7 +360,8 @@ def rank_2d_float64(object in_arr, axis=0, ties_method='average',
             if val == nan_value and keep_na:
                 ranks[i, argsorted[i, j]] = nan
                 continue
-            if j == k - 1 or fabs(values[i, j + 1] - val) > FP_ERR:
+            count += 1.0
+            if j == k - 1 or float64_are_diff(values[i, j + 1], val):
                 if tiebreak == TIEBREAK_AVERAGE:
                     for z in range(j - dups + 1, j + 1):
                         ranks[i, argsorted[i, z]] = sum_ranks / dups
@@ -337,8 +377,13 @@ def rank_2d_float64(object in_arr, axis=0, ties_method='average',
                 elif tiebreak == TIEBREAK_FIRST_DESCENDING:
                     for z in range(j - dups + 1, j + 1):
                         ranks[i, argsorted[i, z]] = 2 * j - z - dups + 2
+                elif tiebreak == TIEBREAK_DENSE:
+                    total_tie_count += 1
+                    for z in range(j - dups + 1, j + 1):
+                        ranks[i, argsorted[i, z]] = total_tie_count
                 sum_ranks = dups = 0
-
+        if pct:
+            ranks[i, :] /= count
     if axis == 0:
         return ranks.T
     else:
@@ -346,19 +391,20 @@ def rank_2d_float64(object in_arr, axis=0, ties_method='average',
 
 
 def rank_2d_int64(object in_arr, axis=0, ties_method='average',
-                    ascending=True, na_option='keep'):
+                    ascending=True, na_option='keep', pct=False):
     """
     Fast NaN-friendly version of scipy.stats.rankdata
     """
 
     cdef:
-        Py_ssize_t i, j, z, k, n, dups = 0
+        Py_ssize_t i, j, z, k, n, dups = 0, total_tie_count = 0
         ndarray[float64_t, ndim=2] ranks
         ndarray[int64_t, ndim=2] argsorted
         ndarray[int64_t, ndim=2, cast=True] values
         int64_t val
         float64_t sum_ranks = 0
         int tiebreak = 0
+        float count = 0.0
     tiebreak = tiebreakers[ties_method]
 
     if axis == 0:
@@ -385,10 +431,13 @@ def rank_2d_int64(object in_arr, axis=0, ties_method='average',
 
     for i in range(n):
         dups = sum_ranks = 0
+        total_tie_count = 0
+        count = 0.0
         for j in range(k):
             sum_ranks += j + 1
             dups += 1
             val = values[i, j]
+            count += 1.0
             if j == k - 1 or fabs(values[i, j + 1] - val) > FP_ERR:
                 if tiebreak == TIEBREAK_AVERAGE:
                     for z in range(j - dups + 1, j + 1):
@@ -405,8 +454,13 @@ def rank_2d_int64(object in_arr, axis=0, ties_method='average',
                 elif tiebreak == TIEBREAK_FIRST_DESCENDING:
                     for z in range(j - dups + 1, j + 1):
                         ranks[i, argsorted[i, z]] = 2 * j - z - dups + 2
+                elif tiebreak == TIEBREAK_DENSE:
+                    total_tie_count += 1
+                    for z in range(j - dups + 1, j + 1):
+                        ranks[i, argsorted[i, z]] = total_tie_count
                 sum_ranks = dups = 0
-
+        if pct:
+            ranks[i, :] /= count
     if axis == 0:
         return ranks.T
     else:
@@ -414,13 +468,13 @@ def rank_2d_int64(object in_arr, axis=0, ties_method='average',
 
 
 def rank_1d_generic(object in_arr, bint retry=1, ties_method='average',
-                    ascending=True, na_option='keep'):
+                    ascending=True, na_option='keep', pct=False):
     """
     Fast NaN-friendly version of scipy.stats.rankdata
     """
 
     cdef:
-        Py_ssize_t i, j, n, dups = 0
+        Py_ssize_t i, j, n, dups = 0, total_tie_count = 0
         ndarray[float64_t] ranks
         ndarray sorted_data, values
         ndarray[int64_t] argsorted
@@ -428,6 +482,8 @@ def rank_1d_generic(object in_arr, bint retry=1, ties_method='average',
         float64_t sum_ranks = 0
         int tiebreak = 0
         bint keep_na = 0
+        float count = 0.0
+
 
     tiebreak = tiebreakers[ties_method]
 
@@ -457,7 +513,7 @@ def rank_1d_generic(object in_arr, bint retry=1, ties_method='average',
         if not retry:
             raise
 
-        valid_locs = (-mask).nonzero()[0]
+        valid_locs = (~mask).nonzero()[0]
         ranks.put(valid_locs, rank_1d_generic(values.take(valid_locs), 0,
                                               ties_method=ties_method,
                                               ascending=ascending))
@@ -469,7 +525,6 @@ def rank_1d_generic(object in_arr, bint retry=1, ties_method='average',
 
     sorted_data = values.take(_as)
     argsorted = _as.astype('i8')
-
     for i in range(n):
         sum_ranks += i + 1
         dups += 1
@@ -479,6 +534,7 @@ def rank_1d_generic(object in_arr, bint retry=1, ties_method='average',
             continue
         if (i == n - 1 or
             are_diff(util.get_value_at(sorted_data, i + 1), val)):
+            count += 1.0
             if tiebreak == TIEBREAK_AVERAGE:
                 for j in range(i - dups + 1, i + 1):
                     ranks[argsorted[j]] = sum_ranks / dups
@@ -490,8 +546,15 @@ def rank_1d_generic(object in_arr, bint retry=1, ties_method='average',
                     ranks[argsorted[j]] = i + 1
             elif tiebreak == TIEBREAK_FIRST:
                 raise ValueError('first not supported for non-numeric data')
+            elif tiebreak == TIEBREAK_DENSE:
+                total_tie_count += 1
+                for j in range(i - dups + 1, i + 1):
+                    ranks[argsorted[j]] = total_tie_count
             sum_ranks = dups = 0
-    return ranks
+    if pct:
+        return ranks / count
+    else:
+        return ranks
 
 cdef inline are_diff(object left, object right):
     try:
@@ -523,13 +586,14 @@ class NegInfinity(object):
     __cmp__ = _return_true
 
 def rank_2d_generic(object in_arr, axis=0, ties_method='average',
-                    ascending=True, na_option='keep'):
+                    ascending=True, na_option='keep', pct=False):
     """
     Fast NaN-friendly version of scipy.stats.rankdata
     """
 
     cdef:
         Py_ssize_t i, j, z, k, n, infs, dups = 0
+        Py_ssize_t total_tie_count = 0
         ndarray[float64_t, ndim=2] ranks
         ndarray[object, ndim=2] values
         ndarray[int64_t, ndim=2] argsorted
@@ -537,6 +601,7 @@ def rank_2d_generic(object in_arr, axis=0, ties_method='average',
         float64_t sum_ranks = 0
         int tiebreak = 0
         bint keep_na = 0
+        float count = 0.0
 
     tiebreak = tiebreakers[ties_method]
 
@@ -571,7 +636,8 @@ def rank_2d_generic(object in_arr, axis=0, ties_method='average',
         for i in range(len(values)):
             ranks[i] = rank_1d_generic(in_arr[i],
                                        ties_method=ties_method,
-                                       ascending=ascending)
+                                       ascending=ascending,
+                                       pct=pct)
         if axis == 0:
             return ranks.T
         else:
@@ -585,12 +651,15 @@ def rank_2d_generic(object in_arr, axis=0, ties_method='average',
 
     for i in range(n):
         dups = sum_ranks = infs = 0
+        total_tie_count = 0
+        count = 0.0
         for j in range(k):
             val = values[i, j]
             if val is nan_value and keep_na:
                 ranks[i, argsorted[i, j]] = nan
                 infs += 1
                 continue
+            count += 1.0
             sum_ranks += (j - infs) + 1
             dups += 1
             if j == k - 1 or are_diff(values[i, j + 1], val):
@@ -606,8 +675,13 @@ def rank_2d_generic(object in_arr, axis=0, ties_method='average',
                 elif tiebreak == TIEBREAK_FIRST:
                     raise ValueError('first not supported for '
                                      'non-numeric data')
+                elif tiebreak == TIEBREAK_DENSE:
+                    total_tie_count += 1
+                    for z in range(j - dups + 1, j + 1):
+                        ranks[i, argsorted[i, z]] = total_tie_count
                 sum_ranks = dups = 0
-
+        if pct:
+            ranks[i, :] /= count
     if axis == 0:
         return ranks.T
     else:
@@ -665,16 +739,43 @@ def _check_minp(win, minp, N):
 # Physical description: 366 p.
 #               Series: Prentice-Hall Series in Automatic Computation
 
-def kth_smallest(ndarray[double_t] a, Py_ssize_t k):
-    cdef:
-        Py_ssize_t i,j,l,m,n
-        double_t x, t
 
-    n = len(a)
+ctypedef fused numeric:
+    int8_t
+    int16_t
+    int32_t
+    int64_t
+
+    uint8_t
+    uint16_t
+    uint32_t
+    uint64_t
+
+    float32_t
+    float64_t
+
+
+cdef inline Py_ssize_t swap(numeric *a, numeric *b) except -1:
+    cdef numeric t
+
+    # cython doesn't allow pointer dereference so use array syntax
+    t = a[0]
+    a[0] = b[0]
+    b[0] = t
+    return 0
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+cpdef numeric kth_smallest(numeric[:] a, Py_ssize_t k):
+    cdef:
+        Py_ssize_t i, j, l, m, n = a.size
+        numeric x
 
     l = 0
-    m = n-1
-    while (l<m):
+    m = n - 1
+
+    while l < m:
         x = a[k]
         i = l
         j = m
@@ -683,9 +784,7 @@ def kth_smallest(ndarray[double_t] a, Py_ssize_t k):
             while a[i] < x: i += 1
             while x < a[j]: j -= 1
             if i <= j:
-                t = a[i]
-                a[i] = a[j]
-                a[j] = t
+                swap(&a[i], &a[j])
                 i += 1; j -= 1
 
             if i > j: break
@@ -693,6 +792,7 @@ def kth_smallest(ndarray[double_t] a, Py_ssize_t k):
         if j < k: l = i
         if k < i: m = j
     return a[k]
+
 
 cdef inline kth_smallest_c(float64_t* a, Py_ssize_t k, Py_ssize_t n):
     cdef:
@@ -710,9 +810,7 @@ cdef inline kth_smallest_c(float64_t* a, Py_ssize_t k, Py_ssize_t n):
             while a[i] < x: i += 1
             while x < a[j]: j -= 1
             if i <= j:
-                t = a[i]
-                a[i] = a[j]
-                a[j] = t
+                swap(&a[i], &a[j])
                 i += 1; j -= 1
 
             if i > j: break
@@ -722,22 +820,22 @@ cdef inline kth_smallest_c(float64_t* a, Py_ssize_t k, Py_ssize_t n):
     return a[k]
 
 
-def median(ndarray arr):
+cpdef numeric median(numeric[:] arr):
     '''
     A faster median
     '''
-    cdef int n = len(arr)
+    cdef Py_ssize_t n = arr.size
 
-    if len(arr) == 0:
+    if n == 0:
         return np.NaN
 
     arr = arr.copy()
 
     if n % 2:
-        return kth_smallest(arr, n / 2)
+        return kth_smallest(arr, n // 2)
     else:
-        return (kth_smallest(arr, n / 2) +
-                kth_smallest(arr, n / 2 - 1)) / 2
+        return (kth_smallest(arr, n // 2) +
+                kth_smallest(arr, n // 2 - 1)) / 2
 
 
 # -------------- Min, Max subsequence
@@ -1064,7 +1162,10 @@ def nancorr_spearman(ndarray[float64_t, ndim=2] mat, Py_ssize_t minp=1):
 # Rolling variance
 
 def roll_var(ndarray[double_t] input, int win, int minp, int ddof=1):
-    cdef double val, prev, sum_x = 0, sum_xx = 0, nobs = 0
+    """
+    Numerically stable implementation using Welford's method.
+    """
+    cdef double val, prev, mean_x = 0, ssqdm_x = 0, nobs = 0, delta
     cdef Py_ssize_t i
     cdef Py_ssize_t N = len(input)
 
@@ -1072,47 +1173,70 @@ def roll_var(ndarray[double_t] input, int win, int minp, int ddof=1):
 
     minp = _check_minp(win, minp, N)
 
-    for i from 0 <= i < minp - 1:
+    for i from 0 <= i < win:
         val = input[i]
 
         # Not NaN
         if val == val:
             nobs += 1
-            sum_x += val
-            sum_xx += val * val
-
-        output[i] = NaN
-
-    for i from minp - 1 <= i < N:
-        val = input[i]
-
-        if val == val:
-            nobs += 1
-            sum_x += val
-            sum_xx += val * val
-
-        if i > win - 1:
-            prev = input[i - win]
-            if prev == prev:
-                sum_x -= prev
-                sum_xx -= prev * prev
-                nobs -= 1
+            delta = (val - mean_x)
+            mean_x += delta / nobs
+            ssqdm_x += delta * (val - mean_x)
 
         if nobs >= minp:
-            # pathological case
+            #pathological case
             if nobs == 1:
-                output[i] = 0
-                continue
-
-            val = (nobs * sum_xx - sum_x * sum_x) / (nobs * (nobs - ddof))
-            if val < 0:
                 val = 0
-
-            output[i] = val
+            else:
+                val = ssqdm_x / (nobs - ddof)
+                if val < 0:
+                    val = 0
         else:
-            output[i] = NaN
+            val = NaN
+
+        output[i] = val
+
+    for i from win <= i < N:
+        val = input[i]
+        prev = input[i - win]
+
+        if val == val:
+            if prev == prev:
+                delta = val - prev
+                prev -= mean_x
+                mean_x += delta / nobs
+                val -= mean_x
+                ssqdm_x += (val + prev) * delta
+            else:
+                nobs += 1
+                delta = (val - mean_x)
+                mean_x += delta / nobs
+                ssqdm_x += delta * (val - mean_x)
+        elif prev == prev:
+            nobs -= 1
+            if nobs:
+                delta = (prev - mean_x)
+                mean_x -= delta  / nobs
+                ssqdm_x -= delta * (prev - mean_x)
+            else:
+                mean_x = 0
+                ssqdm_x = 0
+
+        if nobs >= minp:
+            #pathological case
+            if nobs == 1:
+                val = 0
+            else:
+                val = ssqdm_x / (nobs - ddof)
+                if val < 0:
+                    val = 0
+        else:
+            val = NaN
+
+        output[i] = val
 
     return output
+
 
 #-------------------------------------------------------------------------------
 # Rolling skewness
@@ -1167,8 +1291,11 @@ def roll_skew(ndarray[double_t] input, int win, int minp):
 
             R = sqrt(B)
 
-            output[i] = ((sqrt(nobs * (nobs - 1.)) * C) /
-                         ((nobs-2) * R * R * R))
+            if B == 0 or nobs < 3:
+                output[i] = NaN
+            else:
+                output[i] = ((sqrt(nobs * (nobs - 1.)) * C) /
+                             ((nobs-2) * R * R * R))
         else:
             output[i] = NaN
 
@@ -1236,10 +1363,15 @@ def roll_kurt(ndarray[double_t] input,
             R = R * A
             D = xxxx / nobs - R - 6*B*A*A - 4*C*A
 
-            K = (nobs * nobs - 1.)*D/(B*B) - 3*((nobs-1.)**2)
-            K = K / ((nobs - 2.)*(nobs-3.))
+            if B == 0 or nobs < 4:
+                output[i] = NaN
 
-            output[i] = K
+            else:
+                K = (nobs * nobs - 1.)*D/(B*B) - 3*((nobs-1.)**2)
+                K = K / ((nobs - 2.)*(nobs-3.))
+
+                output[i] = K
+
         else:
             output[i] = NaN
 
@@ -1619,10 +1751,11 @@ def roll_quantile(ndarray[float64_t, cast=True] input, int win,
     return output
 
 def roll_generic(ndarray[float64_t, cast=True] input, int win,
-                 int minp, object func):
+                 int minp, object func, object args, object kwargs):
     cdef ndarray[double_t] output, counts, bufarr
     cdef Py_ssize_t i, n
-    cdef float64_t *buf, *oldbuf
+    cdef float64_t *buf
+    cdef float64_t *oldbuf
 
     if not input.flags.c_contiguous:
         input = input.copy('C')
@@ -1643,7 +1776,8 @@ def roll_generic(ndarray[float64_t, cast=True] input, int win,
     n = len(input)
     for i from 0 <= i < int_min(win, n):
         if counts[i] >= minp:
-            output[i] = func(input[int_max(i - win + 1, 0) : i + 1])
+            output[i] = func(input[int_max(i - win + 1, 0) : i + 1], *args,
+                             **kwargs)
         else:
             output[i] = NaN
 
@@ -1651,7 +1785,7 @@ def roll_generic(ndarray[float64_t, cast=True] input, int win,
         buf = buf + 1
         bufarr.data = <char*> buf
         if counts[i] >= minp:
-            output[i] = func(bufarr)
+            output[i] = func(bufarr, *args, **kwargs)
         else:
             output[i] = NaN
 
@@ -2119,7 +2253,7 @@ cdef inline float64_t _median_linear(float64_t* a, int n):
 
 
     if n % 2:
-        result = kth_smallest_c(a, n / 2, n)
+        result = kth_smallest_c( a, n / 2, n)
     else:
         result = (kth_smallest_c(a, n / 2, n) +
                   kth_smallest_c(a, n / 2 - 1, n)) / 2

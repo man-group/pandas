@@ -8,6 +8,7 @@ from pandas.core.base import PandasObject
 from pandas.tseries.frequencies import (get_freq_code as _gfc,
                                         _month_numbers, FreqGroup)
 from pandas.tseries.index import DatetimeIndex, Int64Index, Index
+from pandas.core.base import DatetimeIndexOpsMixin
 from pandas.tseries.tools import parse_time_string
 import pandas.tseries.frequencies as _freq_mod
 
@@ -500,7 +501,7 @@ def _period_index_cmp(opname):
     return wrapper
 
 
-class PeriodIndex(Int64Index):
+class PeriodIndex(DatetimeIndexOpsMixin, Int64Index):
     """
     Immutable ndarray holding ordinal values indicating regular periods in
     time such as particular years, quarters, months, etc. A value of 1 is the
@@ -551,6 +552,7 @@ class PeriodIndex(Int64Index):
     >>> idx2 = PeriodIndex(start='2000', end='2010', freq='A')
     """
     _box_scalars = True
+    _allow_period_index_ops = True
 
     __eq__ = _period_index_cmp('__eq__')
     __ne__ = _period_index_cmp('__ne__')
@@ -668,6 +670,13 @@ class PeriodIndex(Int64Index):
 
         return data, freq
 
+    @classmethod
+    def _simple_new(cls, values, name, freq=None, **kwargs):
+        result = values.view(cls)
+        result.name = name
+        result.freq = freq
+        return result
+
     def __contains__(self, key):
         if not isinstance(key, Period) or key.freq != self.freq:
             if isinstance(key, compat.string_types):
@@ -722,6 +731,12 @@ class PeriodIndex(Int64Index):
         for val in self.values:
             yield Period(ordinal=val, freq=self.freq)
 
+    def searchsorted(self, key, side='left'):
+        if isinstance(key, compat.string_types):
+            key = Period(key, freq=self.freq).ordinal
+
+        return self.values.searchsorted(key, side=side)
+
     @property
     def is_all_dates(self):
         return True
@@ -737,15 +752,6 @@ class PeriodIndex(Int64Index):
             raise ValueError('Index is not monotonic')
         values = self.values
         return ((values[1:] - values[:-1]) < 2).all()
-
-    def factorize(self):
-        """
-        Specialized factorize that boxes uniques
-        """
-        from pandas.core.algorithms import factorize
-        labels, uniques = factorize(self.values)
-        uniques = PeriodIndex(ordinal=uniques, freq=self.freq)
-        return labels, uniques
 
     @property
     def freqstr(self):
@@ -773,19 +779,19 @@ class PeriodIndex(Int64Index):
     def to_datetime(self, dayfirst=False):
         return self.to_timestamp()
 
-    year = _field_accessor('year', 0)
-    month = _field_accessor('month', 3)
-    day = _field_accessor('day', 4)
-    hour = _field_accessor('hour', 5)
-    minute = _field_accessor('minute', 6)
-    second = _field_accessor('second', 7)
-    weekofyear = _field_accessor('week', 8)
-    week = weekofyear
-    dayofweek = _field_accessor('dayofweek', 10)
-    weekday = dayofweek
-    dayofyear = day_of_year = _field_accessor('dayofyear', 9)
-    quarter = _field_accessor('quarter', 2)
-    qyear = _field_accessor('qyear', 1)
+    _year = _field_accessor('year', 0)
+    _month = _field_accessor('month', 3)
+    _day = _field_accessor('day', 4)
+    _hour = _field_accessor('hour', 5)
+    _minute = _field_accessor('minute', 6)
+    _second = _field_accessor('second', 7)
+    _weekofyear = _field_accessor('week', 8)
+    _week = _weekofyear
+    _dayofweek = _field_accessor('dayofweek', 10)
+    _weekday = _dayofweek
+    _dayofyear = day_of_year = _field_accessor('dayofyear', 9)
+    _quarter = _field_accessor('quarter', 2)
+    _qyear = _field_accessor('qyear', 1)
 
     # Try to run function on index first, and then on elements of index
     # Especially important for group-by functionality
@@ -909,12 +915,12 @@ class PeriodIndex(Int64Index):
                     pos = np.searchsorted(self.values, [ord1, ord2])
                     key = slice(pos[0], pos[1] + 1)
                     return series[key]
-                else:
+                elif grp == freqn:
                     key = Period(asdt, freq=self.freq).ordinal
                     return _maybe_box(self, self._engine.get_value(s, key), series, key)
+                else:
+                    raise KeyError(key)
             except TypeError:
-                pass
-            except KeyError:
                 pass
 
             key = Period(key, self.freq).ordinal
@@ -979,8 +985,10 @@ class PeriodIndex(Int64Index):
             raise ValueError('Partial indexing only valid for '
                              'ordered time series')
 
-        asdt, parsed, reso = parse_time_string(key, self.freq)
-        key = asdt
+        key, parsed, reso = parse_time_string(key, self.freq)
+
+        grp = _freq_mod._infer_period_group(reso)
+        freqn = _freq_mod._period_group(self.freq)
 
         if reso == 'year':
             t1 = Period(year=parsed.year, freq='A')
@@ -989,6 +997,19 @@ class PeriodIndex(Int64Index):
         elif reso == 'quarter':
             q = (parsed.month - 1) // 3 + 1
             t1 = Period(year=parsed.year, quarter=q, freq='Q-DEC')
+        elif reso == 'day' and grp < freqn:
+            t1 = Period(year=parsed.year, month=parsed.month, day=parsed.day,
+                        freq='D')
+        elif reso == 'hour' and grp < freqn:
+            t1 = Period(year=parsed.year, month=parsed.month, day=parsed.day,
+                        hour=parsed.hour, freq='H')
+        elif reso == 'minute' and grp < freqn:
+            t1 = Period(year=parsed.year, month=parsed.month, day=parsed.day,
+                        hour=parsed.hour, minute=parsed.minute, freq='T')
+        elif reso == 'second' and grp < freqn:
+            t1 = Period(year=parsed.year, month=parsed.month, day=parsed.day,
+                        hour=parsed.hour, minute=parsed.minute, second=parsed.second,
+                        freq='S')
         else:
             raise KeyError(key)
 
@@ -1055,8 +1076,6 @@ class PeriodIndex(Int64Index):
 
             return PeriodIndex(result, name=self.name, freq=self.freq)
 
-    _getitem_slice = __getitem__
-
     def _format_with_header(self, header, **kwargs):
         return header + self._format_native_types(**kwargs)
 
@@ -1066,7 +1085,7 @@ class PeriodIndex(Int64Index):
         mask = isnull(self.values)
         values[mask] = na_rep
 
-        imask = -mask
+        imask = ~mask
         values[imask] = np.array([u('%s') % dt for dt in values[imask]])
         return values.tolist()
 

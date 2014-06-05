@@ -238,8 +238,8 @@ class TestBlockIndex(tm.TestCase):
     def test_equals(self):
         index = BlockIndex(10, [0, 4], [2, 5])
 
-        self.assert_(index.equals(index))
-        self.assert_(not index.equals(BlockIndex(10, [0, 4], [2, 6])))
+        self.assertTrue(index.equals(index))
+        self.assertFalse(index.equals(BlockIndex(10, [0, 4], [2, 6])))
 
     def test_check_integrity(self):
         locs = []
@@ -269,15 +269,15 @@ class TestBlockIndex(tm.TestCase):
 
     def test_to_block_index(self):
         index = BlockIndex(10, [0, 5], [4, 5])
-        self.assert_(index.to_block_index() is index)
+        self.assertIs(index.to_block_index(), index)
 
 
 class TestIntIndex(tm.TestCase):
 
     def test_equals(self):
         index = IntIndex(10, [0, 1, 2, 3, 4])
-        self.assert_(index.equals(index))
-        self.assert_(not index.equals(IntIndex(10, [0, 1, 2, 3])))
+        self.assertTrue(index.equals(index))
+        self.assertFalse(index.equals(IntIndex(10, [0, 1, 2, 3])))
 
     def test_to_block_index(self):
         def _check_case(xloc, xlen, yloc, ylen, eloc, elen):
@@ -288,13 +288,13 @@ class TestIntIndex(tm.TestCase):
             xbindex = xindex.to_int_index().to_block_index()
             ybindex = yindex.to_int_index().to_block_index()
             tm.assert_isinstance(xbindex, BlockIndex)
-            self.assert_(xbindex.equals(xindex))
-            self.assert_(ybindex.equals(yindex))
+            self.assertTrue(xbindex.equals(xindex))
+            self.assertTrue(ybindex.equals(yindex))
         check_cases(_check_case)
 
     def test_to_int_index(self):
         index = IntIndex(10, [2, 3, 4, 5, 6])
-        self.assert_(index.to_int_index() is index)
+        self.assertIs(index.to_int_index(), index)
 
 
 class TestSparseOperators(tm.TestCase):
@@ -313,7 +313,7 @@ class TestSparseOperators(tm.TestCase):
             result_block_vals, rb_index = sparse_op(x, xindex, y, yindex)
             result_int_vals, ri_index = sparse_op(x, xdindex, y, ydindex)
 
-            self.assert_(rb_index.to_int_index().equals(ri_index))
+            self.assertTrue(rb_index.to_int_index().equals(ri_index))
             assert_equal(result_block_vals, result_int_vals)
 
             # check versus Series...
@@ -344,7 +344,7 @@ class TestSparseOperators(tm.TestCase):
             result_int_vals, ri_index = sparse_op(x, xdindex, xfill,
                                                   y, ydindex, yfill)
 
-            self.assert_(rb_index.to_int_index().equals(ri_index))
+            self.assertTrue(rb_index.to_int_index().equals(ri_index))
             assert_equal(result_block_vals, result_int_vals)
 
             # check versus Series...

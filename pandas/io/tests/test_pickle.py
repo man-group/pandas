@@ -33,7 +33,7 @@ class TestPickle(tm.TestCase):
 
     def compare_element(self, typ, result, expected):
         if isinstance(expected,Index):
-            self.assert_(expected.equals(result))
+            self.assertTrue(expected.equals(result))
             return
 
         if typ.startswith('sp_'):
@@ -83,7 +83,6 @@ class TestPickle(tm.TestCase):
         self.read_pickles('0.13.0')
 
     def test_round_trip_current(self):
-
         for typ, dv in self.data.items():
 
             for dt, expected in dv.items():

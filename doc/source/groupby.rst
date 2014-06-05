@@ -344,8 +344,9 @@ Aggregation
 -----------
 
 Once the GroupBy object has been created, several methods are available to
-perform a computation on the grouped data. An obvious one is aggregation via
-the ``aggregate`` or equivalently ``agg`` method:
+perform a computation on the grouped data.
+
+An obvious one is aggregation via the ``aggregate`` or equivalently ``agg`` method:
 
 .. ipython:: python
 
@@ -382,6 +383,24 @@ index are the group names and whose values are the sizes of each group.
 
    grouped.size()
 
+.. ipython:: python
+
+   grouped.describe()
+
+.. note::
+
+   Aggregation functions **will not** return the groups that you are aggregating over
+   if they are named *columns*, when ``as_index=True``, the default. The grouped columns will
+   be the **indices** of the returned object.
+
+   Passing ``as_index=False`` **will** return the groups that you are aggregating over, if they are
+   named *columns*.
+
+   Aggregating functions are ones that reduce the dimension of the returned objects,
+   for example: ``mean, sum, size, count, std, var, describe, first, last, nth, min, max``. This is
+   what happens when you do for example ``DataFrame.sum()`` and get back a ``Series``.
+
+   ``nth`` can act as a reducer *or* a filter, see :ref:`here <groupby.nth>`
 
 .. _groupby.aggregate.multifunc:
 
@@ -537,6 +556,17 @@ and that the transformed data contains no NAs.
    grouped_trans.count() # counts after transformation
    grouped_trans.size() # Verify non-NA count equals group size
 
+.. note::
+
+   Some functions when applied to a groupby object will automatically transform the input, returning
+   an object of the same shape as the original. Passing ``as_index=False`` will not affect these transformation methods.
+
+   For example: ``fillna, ffill, bfill, shift``.
+
+   .. ipython:: python
+
+      grouped.ffill()
+
 .. _groupby.filter:
 
 Filtration
@@ -575,9 +605,22 @@ with NaNs.
 For dataframes with multiple columns, filters should explicitly specify a column as the filter criterion.
 
 .. ipython:: python
-   
+
    dff['C'] = np.arange(8)
    dff.groupby('B').filter(lambda x: len(x['C']) > 2)
+
+.. note::
+
+   Some functions when applied to a groupby object will act as a **filter** on the input, returning
+   a reduced shape of the original (and potentitally eliminating groups), but with the index unchanged.
+   Passing ``as_index=False`` will not affect these transformation methods.
+
+   For example: ``head, tail``.
+
+   .. ipython:: python
+
+      dff.groupby('B').head(2)
+
 
 .. _groupby.dispatch:
 
@@ -663,6 +706,31 @@ The dimension of the returned result can also change:
     s
     s.apply(f)
 
+
+.. note::
+
+   ``apply`` can act as a reducer, transformer, *or* filter function, depending on exactly what is passed to apply.
+   So depending on the path taken, and exactly what you are grouping. Thus the grouped columns(s) may be included in
+   the output as well as set the indices.
+
+.. warning::
+
+    In the current implementation apply calls func twice on the
+    first group to decide whether it can take a fast or slow code
+    path. This can lead to unexpected behavior if func has
+    side-effects, as they will take effect twice for the first
+    group.
+
+    .. ipython:: python
+
+        d = DataFrame({"a":["x", "y"], "b":[1,2]})
+        def identity(df):
+            print df
+            return df
+
+        d.groupby("a").apply(identity)
+
+
 Other useful features
 ---------------------
 
@@ -707,6 +775,123 @@ can be used as group keys. If so, the order of the levels will be preserved:
 
    data.groupby(factor).mean()
 
+.. _groupby.specify:
+
+Grouping with a Grouper specification
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Your may need to specify a bit more data to properly group. You can
+use the ``pd.Grouper`` to provide this local control.
+
+.. ipython:: python
+
+   import datetime as DT
+
+   df = DataFrame({
+          'Branch' : 'A A A A A A A B'.split(),
+          'Buyer': 'Carl Mark Carl Carl Joe Joe Joe Carl'.split(),
+          'Quantity': [1,3,5,1,8,1,9,3],
+          'Date' : [
+                DT.datetime(2013,1,1,13,0),
+                DT.datetime(2013,1,1,13,5),
+                DT.datetime(2013,10,1,20,0),
+                DT.datetime(2013,10,2,10,0),
+                DT.datetime(2013,10,1,20,0),
+                DT.datetime(2013,10,2,10,0),
+                DT.datetime(2013,12,2,12,0),
+                DT.datetime(2013,12,2,14,0),
+                ]})
+
+   df
+
+Groupby a specific column with the desired frequency. This is like resampling.
+
+.. ipython:: python
+
+   df.groupby([pd.Grouper(freq='1M',key='Date'),'Buyer']).sum()
+
+You have an ambiguous specification in that you have a named index and a column
+that could be potential groupers.
+
+.. ipython:: python
+
+   df = df.set_index('Date')
+   df['Date'] = df.index + pd.offsets.MonthEnd(2)
+   df.groupby([pd.Grouper(freq='6M',key='Date'),'Buyer']).sum()
+
+   df.groupby([pd.Grouper(freq='6M',level='Date'),'Buyer']).sum()
+
+
+Taking the first rows of each group
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Just like for a DataFrame or Series you can call head and tail on a groupby:
+
+.. ipython:: python
+
+   df = DataFrame([[1, 2], [1, 4], [5, 6]], columns=['A', 'B'])
+   df
+
+   g = df.groupby('A')
+   g.head(1)
+
+   g.tail(1)
+
+This shows the first or last n rows from each group.
+
+.. warning::
+
+   Before 0.14.0 this was implemented with a fall-through apply,
+   so the result would incorrectly respect the as_index flag:
+
+   .. code-block:: python
+
+       >>> g.head(1):  # was equivalent to g.apply(lambda x: x.head(1))
+             A  B
+        A
+        1 0  1  2
+        5 2  5  6
+
+.. _groupby.nth:
+
+Taking the nth row of each group
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+To select from a DataFrame or Series the nth item, use the nth method. This is a reduction method, and will return a single row (or no row) per group:
+
+.. ipython:: python
+
+   df = DataFrame([[1, np.nan], [1, 4], [5, 6]], columns=['A', 'B'])
+   g = df.groupby('A')
+
+   g.nth(0)
+   g.nth(-1)
+   g.nth(1)
+
+If you want to select the nth not-null method, use the ``dropna`` kwarg. For a DataFrame this should be either ``'any'`` or ``'all'`` just like you would pass to dropna, for a Series this just needs to be truthy.
+
+.. ipython:: python
+
+   # nth(0) is the same as g.first()
+   g.nth(0, dropna='any')
+   g.first()
+
+   # nth(-1) is the same as g.last()
+   g.nth(-1, dropna='any')  # NaNs denote group exhausted when using dropna
+   g.last()
+
+   g.B.nth(0, dropna=True)
+
+As with other methods, passing ``as_index=False``, will achieve a filtration, which returns the grouped row.
+
+.. ipython:: python
+
+   df = DataFrame([[1, np.nan], [1, 4], [5, 6]], columns=['A', 'B'])
+   g = df.groupby('A',as_index=False)
+
+   g.nth(0)
+   g.nth(-1)
+
 Enumerate group items
 ~~~~~~~~~~~~~~~~~~~~~
 
@@ -723,3 +908,78 @@ To see the order in which each row appears within its group, use the
    df.groupby('A').cumcount()
 
    df.groupby('A').cumcount(ascending=False)  # kwarg only
+
+Plotting
+~~~~~~~~
+
+Groupby also works with some plotting methods.  For example, suppose we
+suspect that some features in a DataFrame my differ by group, in this case,
+the values in column 1 where the group is "B" are 3 higher on average.
+
+.. ipython:: python
+
+   np.random.seed(1234)
+   df = DataFrame(np.random.randn(50, 2))
+   df['g'] = np.random.choice(['A', 'B'], size=50)
+   df.loc[df['g'] == 'B', 1] += 3
+
+We can easily visualize this with a boxplot:
+
+.. ipython:: python
+   :okwarning:
+
+   @savefig groupby_boxplot.png
+   df.groupby('g').boxplot()
+
+The result of calling ``boxplot`` is a dictionary whose keys are the values
+of our grouping column ``g`` ("A" and "B"). The values of the resulting dictionary
+can be controlled by the ``return_type`` keyword of ``boxplot``.
+See the :ref:`visualization documentation<visualization.box>` for more.
+
+.. warning::
+
+  For historical reasons, ``df.groupby("g").boxplot()`` is not equivalent
+  to ``df.boxplot(by="g")``. See :ref:`here<visualization.box.return>` for
+  an explanation.
+
+Examples
+--------
+
+Regrouping by factor
+~~~~~~~~~~~~~~~~~~~~
+
+Regroup columns of a DataFrame according to their sum, and sum the aggregated ones.
+
+.. ipython:: python
+
+   df = pd.DataFrame({'a':[1,0,0], 'b':[0,1,0], 'c':[1,0,0], 'd':[2,3,4]})
+   df
+   df.groupby(df.sum(), axis=1).sum()
+
+
+Returning a Series to propogate names
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Group DataFrame columns, compute a set of metrics and return a named Series.
+The Series name is used as the name for the column index.  This is especially
+useful in conjunction with reshaping operations such as stacking in which the
+column index name will be used as the name of the inserted column:
+
+.. ipython:: python
+
+   df = pd.DataFrame({
+        'a':  [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2],
+        'b':  [0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1],
+        'c':  [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
+        'd':  [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+        })
+
+   def compute_metrics(x):
+       result = {'b_sum': x['b'].sum(), 'c_mean': x['c'].mean()}
+       return pd.Series(result, name='metrics')
+
+   result = df.groupby('a').apply(compute_metrics)
+
+   result
+
+   result.stack()

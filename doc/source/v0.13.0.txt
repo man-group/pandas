@@ -1,6 +1,6 @@
 .. _whatsnew_0130:
 
-v0.13.0 (January 1, 2014)
+v0.13.0 (January 3, 2014)
 ---------------------------
 
 This is a major release from 0.12.0 and includes a number of API changes, several new features and
@@ -149,6 +149,7 @@ API changes
   The following warning / exception will show if this is attempted.
 
   .. ipython:: python
+     :okwarning:
 
      dfc.loc[0]['A'] = 1111
 
@@ -166,6 +167,12 @@ API changes
 
      dfc.loc[0,'A'] = 11
      dfc
+
+- ``Panel.reindex`` has the following call signature ``Panel.reindex(items=None, major_axis=None, minor_axis=None, **kwargs)``
+   to conform with other ``NDFrame`` objects. See :ref:`Internal Refactoring<whatsnew_0130.refactoring>` for more information.
+
+- ``Series.argmin`` and ``Series.argmax`` are now aliased to ``Series.idxmin`` and ``Series.idxmax``. These return the *index* of the
+   min or max element respectively. Prior to 0.13.0 these would return the position of the min / max element. (:issue:`6214`)
 
 Prior Version Deprecations/Changes
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -691,7 +698,7 @@ Experimental
 
      nrows, ncols = 20000, 100
      df1, df2, df3, df4 = [DataFrame(randn(nrows, ncols))
-                           for _ in xrange(4)]
+                           for _ in range(4)]
 
   .. ipython:: python
 

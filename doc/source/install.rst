@@ -16,10 +16,7 @@ compiler (MinGW or Visual Studio) installed. `How-to install MinGW on Windows
 Python version support
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Officially Python 2.6 to 2.7 and Python 3.2+. Python 2.4 and Python 2.5 are no
-longer supported since the userbase has shrunk significantly. Continuing Python
-2.4 and 2.5 support will require either monetary development support or someone
-contributing to the project to restore compatibility.
+Officially Python 2.6, 2.7, 3.2, 3.3, and 3.4.
 
 
 Binary installers
@@ -32,7 +29,7 @@ _____________
 
 Stable installers available on `PyPI <http://pypi.python.org/pypi/pandas>`__
 
-Preliminary builds and installers on the `Pandas download page <http://pandas.pydata.org/getpandas.html>`__ .
+Preliminary builds and installers on the `pandas download page <http://pandas.pydata.org/getpandas.html>`__ .
 
 Overview
 ___________
@@ -95,11 +92,12 @@ Optional Dependencies
     version. Version 0.17.1 or higher.
   * `SciPy <http://www.scipy.org>`__: miscellaneous statistical functions
   * `PyTables <http://www.pytables.org>`__: necessary for HDF5-based storage
+  * `SQLAlchemy <http://www.sqlalchemy.org>`__: for SQL database support. Version 0.8.1 or higher recommended.
   * `matplotlib <http://matplotlib.sourceforge.net/>`__: for plotting
   * `statsmodels <http://statsmodels.sourceforge.net/>`__
      * Needed for parts of :mod:`pandas.stats`
   * `openpyxl <http://packages.python.org/openpyxl/>`__, `xlrd/xlwt <http://www.python-excel.org/>`__
-     * openpyxl version 1.6.1 or higher
+     * openpyxl version 1.6.1 or higher, but lower than 2.0.0
      * Needed for Excel I/O
   * `XlsxWriter <https://pypi.python.org/pypi/XlsxWriter>`__
      * Alternative Excel writer.
@@ -162,8 +160,8 @@ Optional Dependencies
 
    Without the optional dependencies, many useful features will not
    work. Hence, it is highly recommended that you install these. A packaged
-   distribution like the `Enthought Python Distribution
-   <http://enthought.com/products/epd.php>`__ may be worth considering.
+   distribution like `Enthought Canopy
+   <http://enthought.com/products/canopy>`__ may be worth considering.
 
 Installing from source
 ~~~~~~~~~~~~~~~~~~~~~~

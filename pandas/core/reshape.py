@@ -1,6 +1,5 @@
 # pylint: disable=E1101,E1103
 # pylint: disable=W0703,W0622,W0613,W0201
-
 from pandas.compat import range, zip
 from pandas import compat
 import itertools
@@ -19,6 +18,7 @@ import pandas.core.common as com
 import pandas.algos as algos
 
 from pandas.core.index import Index, MultiIndex
+from pandas.tseries.period import PeriodIndex
 
 
 class _Unstacker(object):
@@ -69,14 +69,23 @@ class _Unstacker(object):
             raise ValueError('must pass column labels for multi-column data')
 
         self.index = index
+
+        if isinstance(self.index, MultiIndex):
+            if index._reference_duplicate_name(level):
+                msg = ("Ambiguous reference to {0}. The index "
+                       "names are not unique.".format(level))
+                raise ValueError(msg)
+
         self.level = self.index._get_level_number(level)
 
         levels = index.levels
         labels = index.labels
 
         def _make_index(lev, lab):
-            i = lev.__class__(_make_index_array_level(lev.values, lab))
-            i.name = lev.name
+            values = _make_index_array_level(lev.values, lab)
+            i = lev._simple_new(values, lev.name, 
+                                freq=getattr(lev, 'freq', None),
+                                tz=getattr(lev, 'tz', None))
             return i
 
         self.new_index_levels = [_make_index(lev, lab)
@@ -441,15 +450,17 @@ def _unstack_frame(obj, level):
         new_blocks = []
         mask_blocks = []
         for blk in obj._data.blocks:
+            blk_items = obj._data.items[blk.mgr_locs.indexer]
             bunstacker = _Unstacker(blk.values.T, obj.index, level=level,
-                                    value_columns=blk.items)
+                                    value_columns=blk_items)
             new_items = bunstacker.get_new_columns()
+            new_placement = new_columns.get_indexer(new_items)
             new_values, mask = bunstacker.get_new_values()
 
-            mblk = make_block(mask.T, new_items, new_columns)
+            mblk = make_block(mask.T, placement=new_placement)
             mask_blocks.append(mblk)
 
-            newb = make_block(new_values.T, new_items, new_columns)
+            newb = make_block(new_values.T, placement=new_placement)
             new_blocks.append(newb)
 
         result = DataFrame(BlockManager(new_blocks, new_axes))
@@ -497,6 +508,12 @@ def stack(frame, level=-1, dropna=True):
     stacked : Series
     """
     N, K = frame.shape
+    if isinstance(frame.columns, MultiIndex):
+        if frame.columns._reference_duplicate_name(level):
+            msg = ("Ambiguous reference to {0}. The column "
+                   "names are not unique.".format(level))
+            raise ValueError(msg)
+
     if isinstance(level, int) and level < 0:
         level += frame.columns.nlevels
 
@@ -617,16 +634,34 @@ def melt(frame, id_vars=None, value_vars=None,
          var_name=None, value_name='value', col_level=None):
     """
     "Unpivots" a DataFrame from wide format to long format, optionally leaving
-    id variables set
+    identifier variables set.
+
+    This function is useful to massage a DataFrame into a format where one
+    or more columns are identifier variables (`id_vars`), while all other
+    columns, considered measured variables (`value_vars`), are "unpivoted" to 
+    the row axis, leaving just two non-identifier columns, 'variable' and
+    'value'.
 
     Parameters
     ----------
     frame : DataFrame
-    id_vars : tuple, list, or ndarray
-    value_vars : tuple, list, or ndarray
-    var_name : scalar, if None uses frame.column.name or 'variable'
+    id_vars : tuple, list, or ndarray, optional
+        Column(s) to use as identifier variables.
+    value_vars : tuple, list, or ndarray, optional
+        Column(s) to unpivot. If not specified, uses all columns that
+        are not set as `id_vars`.
+    var_name : scalar
+        Name to use for the 'variable' column. If None it uses
+        ``frame.columns.name`` or 'variable'.
     value_name : scalar, default 'value'
-    col_level : scalar, if columns are a MultiIndex then use this level to melt
+        Name to use for the 'value' column.
+    col_level : int or string, optional
+        If columns are a MultiIndex then use this level to melt.
+
+    See also
+    --------
+    pivot_table
+    DataFrame.pivot
 
     Examples
     --------
@@ -634,35 +669,53 @@ def melt(frame, id_vars=None, value_vars=None,
     >>> df = pd.DataFrame({'A': {0: 'a', 1: 'b', 2: 'c'},
     ...                    'B': {0: 1, 1: 3, 2: 5},
     ...                    'C': {0: 2, 1: 4, 2: 6}})
-
     >>> df
        A  B  C
     0  a  1  2
     1  b  3  4
     2  c  5  6
 
-    >>> melt(df, id_vars=['A'], value_vars=['B'])
+    >>> pd.melt(df, id_vars=['A'], value_vars=['B'])
        A variable  value
     0  a        B      1
     1  b        B      3
     2  c        B      5
+    
+    >>> pd.melt(df, id_vars=['A'], value_vars=['B', 'C'])
+       A variable  value
+    0  a        B      1
+    1  b        B      3
+    2  c        B      5
+    3  a        C      2
+    4  b        C      4
+    5  c        C      6
 
-    >>> melt(df, id_vars=['A'], value_vars=['B'],
-    ... var_name='myVarname', value_name='myValname')
+    The names of 'variable' and 'value' columns can be customized:
+
+    >>> pd.melt(df, id_vars=['A'], value_vars=['B'],
+    ...         var_name='myVarname', value_name='myValname')
        A myVarname  myValname
     0  a         B          1
     1  b         B          3
     2  c         B          5
 
-    >>> df.columns = [list('ABC'), list('DEF')]
+    If you have multi-index columns:
 
-    >>> melt(df, col_level=0, id_vars=['A'], value_vars=['B'])
+    >>> df.columns = [list('ABC'), list('DEF')]
+    >>> df 
+       A  B  C
+       D  E  F
+    0  a  1  2
+    1  b  3  4
+    2  c  5  6
+
+    >>> pd.melt(df, col_level=0, id_vars=['A'], value_vars=['B'])
        A variable  value
     0  a        B      1
     1  b        B      3
     2  c        B      5
 
-    >>> melt(df, id_vars=[('A', 'D')], value_vars=[('B', 'E')])
+    >>> pd.melt(df, id_vars=[('A', 'D')], value_vars=[('B', 'E')])
       (A, D) variable_0 variable_1  value
     0      a          B          E      1
     1      b          B          E      3
@@ -941,6 +994,8 @@ def get_dummies(data, prefix=None, prefix_sep='_', dummy_na=False):
     1  0  1    0
     2  0  0    1
 
+    See also ``Series.str.get_dummies``.
+
     """
     # Series avoids inconsistent NaN handling
     cat = Categorical.from_array(Series(data))
@@ -967,7 +1022,7 @@ def get_dummies(data, prefix=None, prefix_sep='_', dummy_na=False):
         dummy_mat[cat.labels == -1] = 0
 
     if prefix is not None:
-        dummy_cols = ['%s%s%s' % (prefix, prefix_sep, str(v))
+        dummy_cols = ['%s%s%s' % (prefix, prefix_sep, v)
                       for v in levels]
     else:
         dummy_cols = levels
@@ -1021,10 +1076,11 @@ def make_axis_dummies(frame, axis='minor', transform=None):
     return DataFrame(values, columns=items, index=frame.index)
 
 
-def block2d_to_blocknd(values, items, shape, labels, ref_items=None):
+def block2d_to_blocknd(values, placement, shape, labels, ref_items):
     """ pivot to the labels shape """
     from pandas.core.internals import make_block
-    panel_shape = (len(items),) + shape
+
+    panel_shape = (len(placement),) + shape
 
     # TODO: lexsort depth needs to be 2!!
 
@@ -1042,13 +1098,10 @@ def block2d_to_blocknd(values, items, shape, labels, ref_items=None):
         pvalues.fill(fill_value)
 
     values = values
-    for i in range(len(items)):
+    for i in range(len(placement)):
         pvalues[i].flat[mask] = values[:, i]
 
-    if ref_items is None:
-        ref_items = items
-
-    return make_block(pvalues, items, ref_items)
+    return make_block(pvalues, placement=placement)
 
 
 def factor_indexer(shape, labels):

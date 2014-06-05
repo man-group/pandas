@@ -18,10 +18,10 @@ Caveats and Gotchas
 
 .. _gotchas.truth:
 
-Using If/Truth Statements with Pandas
+Using If/Truth Statements with pandas
 -------------------------------------
 
-Pandas follows the numpy convention of raising an error when you try to convert something to a ``bool``.
+pandas follows the numpy convention of raising an error when you try to convert something to a ``bool``.
 This happens in a ``if`` or when using the boolean operations, ``and``, ``or``, or ``not``.  It is not clear
 what the result of
 
@@ -87,6 +87,30 @@ which is almost always what you want anyways.
    dtype: bool
 
 See :ref:`boolean comparisons<basics.compare>` for more examples.
+
+Using the ``in`` operator
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Using the Python ``in`` operator on a Series tests for membership in the
+index, not membership among the values.
+
+.. ipython::
+
+    s = pd.Series(range(5), index=list('abcde'))
+    2 in s
+    'b' in s
+
+If this behavior is surprising, keep in mind that using ``in`` on a Python
+dictionary tests keys, not values, and Series are dict-like.
+To test for membership in the values, use the method :func:`~pandas.Series.isin`:
+
+.. ipython::
+
+    s.isin([2])
+    s.isin([2]).any()
+
+For DataFrames, likewise, ``in`` applies to the column axis,
+testing for membership in the list of column names.
 
 ``NaN``, Integer ``NA`` values and ``NA`` type promotions
 ---------------------------------------------------------
@@ -533,7 +557,15 @@ parse HTML tables in the top-level pandas io function ``read_html``.
 Byte-Ordering Issues
 --------------------
 Occasionally you may have to deal with data that were created on a machine with
-a different byte order than the one on which you are running Python. To deal
+a different byte order than the one on which you are running Python. A common symptom of this issue is an error like
+
+.. code-block:: python
+
+    Traceback
+        ...
+    ValueError: Big-endian buffer not supported on little-endian compiler
+
+To deal
 with this issue you should convert the underlying NumPy array to the native
 system byte order *before* passing it to Series/DataFrame/Panel constructors
 using something similar to the following:

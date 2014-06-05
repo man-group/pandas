@@ -26,9 +26,9 @@ Statistical functions
 Percent Change
 ~~~~~~~~~~~~~~
 
-Both ``Series`` and ``DataFrame`` has a method ``pct_change`` to compute the
+``Series``, ``DataFrame``, and ``Panel`` all have a method ``pct_change`` to compute the
 percent change over a given number of periods (using ``fill_method`` to fill
-NA/null values).
+NA/null values *before* computing the percent change).
 
 .. ipython:: python
 
@@ -59,6 +59,19 @@ The ``Series`` object has a method ``cov`` to compute covariance between series
 Analogously, ``DataFrame`` has a method ``cov`` to compute pairwise covariances
 among the series in the DataFrame, also excluding NA/null values.
 
+.. _computation.covariance.caveats:
+
+.. note::
+
+    Assuming the missing data are missing at random this results in an estimate
+    for the covariance matrix which is unbiased. However, for many applications
+    this estimate may not be acceptable because the estimated covariance matrix
+    is not guaranteed to be positive semi-definite. This could lead to
+    estimated correlations having absolute values which are greater than one,
+    and/or a non-invertible covariance matrix. See `Estimation of covariance
+    matrices <http://en.wikipedia.org/w/index.php?title=Estimation_of_covariance_matrices>`_
+    for more details.
+
 .. ipython:: python
 
    frame = DataFrame(randn(1000, 5), columns=['a', 'b', 'c', 'd', 'e'])
@@ -84,8 +97,7 @@ in order to have a valid result.
 Correlation
 ~~~~~~~~~~~
 
-Several methods for computing correlations are provided. Several kinds of
-correlation methods are provided:
+Several methods for computing correlations are provided:
 
 .. csv-table::
     :header: "Method name", "Description"
@@ -98,6 +110,12 @@ correlation methods are provided:
 .. \rho = \cov(x, y) / \sigma_x \sigma_y
 
 All of these are currently computed using pairwise complete observations.
+
+.. note::
+
+    Please see the :ref:`caveats <computation.covariance.caveats>` associated
+    with this method of calculating correlation matrices in the
+    :ref:`covariance section <computation.covariance>`.
 
 .. ipython:: python
 
@@ -209,7 +227,6 @@ otherwise they can be found in :mod:`pandas.stats.moments`.
     ``rolling_apply``, Generic apply
     ``rolling_cov``, Unbiased covariance (binary)
     ``rolling_corr``, Correlation (binary)
-    ``rolling_corr_pairwise``, Pairwise correlation of DataFrame columns
     ``rolling_window``, Moving window function
 
 Generally these methods all have the same interface. The binary operators
@@ -223,6 +240,10 @@ accept the following arguments:
     or :ref:`DateOffset <timeseries.offsets>` to pre-conform the data to.
     Note that prior to pandas v0.8.0, a keyword argument ``time_rule`` was used
     instead of ``freq`` that referred to the legacy time rule constants
+  - ``how``: optionally specify method for down or re-sampling.  Default is
+    is min for ``rolling_min``, max for ``rolling_max``, median for
+    ``rolling_median``, and mean for all other rolling functions.  See
+    :meth:`DataFrame.resample`'s how argument for more information.
 
 These functions can be applied to ndarrays or Series objects:
 
@@ -325,11 +346,14 @@ Binary rolling moments
 two ``Series`` or any combination of ``DataFrame/Series`` or
 ``DataFrame/DataFrame``. Here is the behavior in each case:
 
-- two ``Series``: compute the statistic for the pairing
+- two ``Series``: compute the statistic for the pairing.
 - ``DataFrame/Series``: compute the statistics for each column of the DataFrame
-  with the passed Series, thus returning a DataFrame
-- ``DataFrame/DataFrame``: compute statistic for matching column names,
-  returning a DataFrame
+  with the passed Series, thus returning a DataFrame.
+- ``DataFrame/DataFrame``: by default compute the statistic for matching column
+  names, returning a DataFrame. If the keyword argument ``pairwise=True`` is
+  passed then computes the statistic for each pair of columns, returning a
+  ``Panel`` whose ``items`` are the dates in question (see :ref:`the next section
+  <stats.moments.corr_pairwise>`).
 
 For example:
 
@@ -340,19 +364,41 @@ For example:
 
 .. _stats.moments.corr_pairwise:
 
-Computing rolling pairwise correlations
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Computing rolling pairwise covariances and correlations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-In financial data analysis and other fields it's common to compute correlation
-matrices for a collection of time series. More difficult is to compute a
-moving-window correlation matrix. This can be done using the
-``rolling_corr_pairwise`` function, which yields a ``Panel`` whose ``items``
-are the dates in question:
+In financial data analysis and other fields it's common to compute covariance
+and correlation matrices for a collection of time series. Often one is also
+interested in moving-window covariance and correlation matrices. This can be
+done by passing the ``pairwise`` keyword argument, which in the case of
+``DataFrame`` inputs will yield a ``Panel`` whose ``items`` are the dates in
+question. In the case of a single DataFrame argument the ``pairwise`` argument
+can even be omitted:
+
+.. note::
+
+    Missing values are ignored and each entry is computed using the pairwise
+    complete observations.  Please see the :ref:`covariance section
+    <computation.covariance>` for :ref:`caveats
+    <computation.covariance.caveats>` associated with this method of
+    calculating covariance and correlation matrices.
 
 .. ipython:: python
 
-   correls = rolling_corr_pairwise(df, 50)
+   covs = rolling_cov(df[['B','C','D']], df[['A','B','C']], 50, pairwise=True)
+   covs[df.index[-50]]
+
+.. ipython:: python
+
+   correls = rolling_corr(df, 50)
    correls[df.index[-50]]
+
+.. note::
+
+    Prior to version 0.14 this was available through ``rolling_corr_pairwise``
+    which is now simply syntactic sugar for calling ``rolling_corr(...,
+    pairwise=True)`` and deprecated. This is likely to be removed in a future
+    release.
 
 You can efficiently retrieve the time series of correlations between two
 columns using ``ix`` indexing:
@@ -401,7 +447,6 @@ Like the ``rolling_`` functions, the following methods are included in the
     ``expanding_apply``, Generic apply
     ``expanding_cov``, Unbiased covariance (binary)
     ``expanding_corr``, Correlation (binary)
-    ``expanding_corr_pairwise``, Pairwise correlation of DataFrame columns
 
 Aside from not having a ``window`` parameter, these functions have the same
 interfaces as their ``rolling_`` counterpart. Like above, the parameters they
@@ -467,7 +512,7 @@ directly, it's easier to think about either the **span**, **center of mass
     \end{cases}
 
 .. note::
-  
+
   the equation above is sometimes written in the form
 
   .. math::
@@ -480,7 +525,7 @@ You can pass one of the three to these functions but not more. **Span**
 corresponds to what is commonly called a "20-day EW moving average" for
 example. **Center of mass** has a more physical interpretation. For example,
 **span** = 20 corresponds to **com** = 9.5. **Halflife** is the period of
-time for the exponential weight to reduce to one half. Here is the list of 
+time for the exponential weight to reduce to one half. Here is the list of
 functions available:
 
 .. csv-table::

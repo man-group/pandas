@@ -1,5 +1,6 @@
 from __future__ import print_function
 # -*- coding: utf-8 -*-
+import re
 
 from pandas.compat import range, zip, lrange, StringIO, PY3, lzip, u
 import pandas.compat as compat
@@ -13,15 +14,18 @@ from numpy import nan
 from numpy.random import randn
 import numpy as np
 
-from pandas import DataFrame, Series, Index
+from pandas import DataFrame, Series, Index, _np_version_under1p7, Timestamp, MultiIndex
 
 import pandas.core.format as fmt
 import pandas.util.testing as tm
+import pandas.core.common as com
 from pandas.util.terminal import get_terminal_size
 import pandas
+import pandas.tslib as tslib
 import pandas as pd
 from pandas.core.config import (set_option, get_option,
                                 option_context, reset_option)
+from datetime import datetime
 
 _frame = DataFrame(tm.getSeriesData())
 
@@ -32,15 +36,36 @@ def curpath():
 
 def has_info_repr(df):
     r = repr(df)
-    return r.split('\n')[0].startswith("<class")
+    c1 = r.split('\n')[0].startswith("<class")
+    c2 = r.split('\n')[0].startswith(r"&lt;class")  # _repr_html_
+    return c1 or c2
+
+def has_non_verbose_info_repr(df):
+    has_info = has_info_repr(df)
+    r = repr(df)
+    nv = len(r.split('\n')) == 4  # 1. <class>, 2. Index, 3. Columns, 4. dtype
+    return has_info and nv
 
 def has_horizontally_truncated_repr(df):
+    try: # Check header row
+        fst_line = np.array(repr(df).splitlines()[0].split())
+        cand_col = np.where(fst_line=='...')[0][0]
+    except:
+        return False
+    # Make sure each row has this ... in the same place
     r = repr(df)
-    return any(l.strip().endswith('...') for l in r.splitlines())
+    for ix,l in enumerate(r.splitlines()):
+        if not r.split()[cand_col] == '...':
+            return False
+    return True
 
 def has_vertically_truncated_repr(df):
     r = repr(df)
-    return '..' in r.splitlines()[-3]
+    only_dot_row = False
+    for row in r.splitlines():
+        if re.match('^[\.\ ]+$',row):
+            only_dot_row = True
+    return only_dot_row
 
 def has_truncated_repr(df):
     return has_horizontally_truncated_repr(df) or has_vertically_truncated_repr(df)
@@ -54,6 +79,24 @@ def has_expanded_repr(df):
         if line.endswith('\\'):
             return True
     return False
+
+def skip_if_np_version_under1p7():
+    if _np_version_under1p7:
+        import nose
+
+        raise nose.SkipTest('numpy >= 1.7 required')
+
+def _skip_if_no_pytz():
+    try:
+        import pytz
+    except ImportError:
+        raise nose.SkipTest("pytz not installed")
+
+def _skip_if_no_dateutil():
+    try:
+        import dateutil
+    except ImportError:
+        raise nose.SkipTest("dateutil not installed")
 
 
 class TestDataFrameFormatting(tm.TestCase):
@@ -91,8 +134,7 @@ class TestDataFrameFormatting(tm.TestCase):
 
         fmt.set_eng_float_format(accuracy=0)
         repr(self.frame)
-
-        fmt.reset_option('^display.')
+        self.reset_display_options()
 
     def test_repr_tuples(self):
         buf = StringIO()
@@ -114,29 +156,29 @@ class TestDataFrameFormatting(tm.TestCase):
 
             for line, value in lzip(r.split('\n'), df['B']):
                 if _strlen(value) + 1 > max_len:
-                    self.assert_('...' in line)
+                    self.assertIn('...', line)
                 else:
-                    self.assert_('...' not in line)
+                    self.assertNotIn('...', line)
 
         with option_context("display.max_colwidth", 999999):
-            self.assert_('...' not in repr(df))
+            self.assertNotIn('...', repr(df))
 
         with option_context("display.max_colwidth", max_len + 2):
-            self.assert_('...' not in repr(df))
+            self.assertNotIn('...', repr(df))
 
     def test_repr_chop_threshold(self):
         df = DataFrame([[0.1, 0.5],[0.5, -0.1]])
         pd.reset_option("display.chop_threshold") # default None
-        self.assertEqual(repr(df), '     0    1\n0  0.1  0.5\n1  0.5 -0.1\n\n[2 rows x 2 columns]')
+        self.assertEqual(repr(df), '     0    1\n0  0.1  0.5\n1  0.5 -0.1')
 
         with option_context("display.chop_threshold", 0.2 ):
-            self.assertEqual(repr(df), '     0    1\n0  0.0  0.5\n1  0.5  0.0\n\n[2 rows x 2 columns]')
+            self.assertEqual(repr(df), '     0    1\n0  0.0  0.5\n1  0.5  0.0')
 
         with option_context("display.chop_threshold", 0.6 ):
-            self.assertEqual(repr(df), '   0  1\n0  0  0\n1  0  0\n\n[2 rows x 2 columns]')
+            self.assertEqual(repr(df), '   0  1\n0  0  0\n1  0  0')
 
         with option_context("display.chop_threshold", None ):
-            self.assertEqual(repr(df),  '     0    1\n0  0.1  0.5\n1  0.5 -0.1\n\n[2 rows x 2 columns]')
+            self.assertEqual(repr(df),  '     0    1\n0  0.1  0.5\n1  0.5 -0.1')
 
     def test_repr_obeys_max_seq_limit(self):
         import pandas.core.common as com
@@ -168,7 +210,7 @@ class TestDataFrameFormatting(tm.TestCase):
                   u("\u03c6")]
         cols = [u("\u03c8")]
         df = DataFrame(data, columns=cols, index=index1)
-        self.assertTrue(type(df.__repr__() == str))  # both py2 / 3
+        self.assertTrue(type(df.__repr__()) == str)  # both py2 / 3
 
     def test_repr_no_backslash(self):
         with option_context('mode.sim_interactive', True):
@@ -183,7 +225,8 @@ class TestDataFrameFormatting(tm.TestCase):
         with option_context('mode.sim_interactive', True):
             with option_context('display.max_columns', 10,
                                 'display.width',20,
-                                'display.max_rows', 20):
+                                'display.max_rows', 20,
+                                'display.show_dimensions', True):
                 with option_context('display.expand_frame_repr', True):
                     self.assertFalse(has_truncated_repr(df_small))
                     self.assertFalse(has_expanded_repr(df_small))
@@ -253,7 +296,7 @@ class TestDataFrameFormatting(tm.TestCase):
                 df = mkframe((term_width // 7) - 2)
                 self.assertFalse(has_expanded_repr(df))
                 df = mkframe((term_width // 7) + 2)
-                print( df._repr_fits_horizontal_())
+                com.pprint_thing(df._repr_fits_horizontal_())
                 self.assertTrue(has_expanded_repr(df))
 
     def test_to_string_repr_unicode(self):
@@ -277,7 +320,7 @@ class TestDataFrameFormatting(tm.TestCase):
             except:
                 pass
             if not line.startswith('dtype:'):
-                self.assert_(len(line) == line_len)
+                self.assertEqual(len(line), line_len)
 
         # it works even if sys.stdin in None
         _stdin= sys.stdin
@@ -360,6 +403,38 @@ class TestDataFrameFormatting(tm.TestCase):
         c20 = len(df.to_string(col_space=20).split("\n")[1])
         c30 = len(df.to_string(col_space=30).split("\n")[1])
         self.assertTrue(c10 < c20 < c30)
+
+    def test_to_string_truncate_indices(self):
+        for index in [ tm.makeStringIndex, tm.makeUnicodeIndex, tm.makeIntIndex,
+                       tm.makeDateIndex, tm.makePeriodIndex ]:
+            for column in [ tm.makeStringIndex ]:
+                for h in [10,20]:
+                    for w in [10,20]:
+                        with option_context("display.expand_frame_repr",False):
+                            df = DataFrame(index=index(h), columns=column(w))
+                            with option_context("display.max_rows", 15):
+                                if h == 20:
+                                    self.assertTrue(has_vertically_truncated_repr(df))
+                                else:
+                                    self.assertFalse(has_vertically_truncated_repr(df))
+                            with option_context("display.max_columns", 15):
+                                if w == 20:
+                                    self.assertTrue(has_horizontally_truncated_repr(df))
+                                else:
+                                    self.assertFalse(has_horizontally_truncated_repr(df))
+                            with option_context("display.max_rows", 15,"display.max_columns", 15):
+                                if h == 20 and w == 20:
+                                    self.assertTrue(has_doubly_truncated_repr(df))
+                                else:
+                                    self.assertFalse(has_doubly_truncated_repr(df))
+
+    def test_to_string_truncate_multilevel(self):
+        arrays = [['bar', 'bar', 'baz', 'baz', 'foo', 'foo', 'qux', 'qux'],
+                  ['one', 'two', 'one', 'two', 'one', 'two', 'one', 'two']]
+        df = pd.DataFrame(index=arrays,columns=arrays)
+        with option_context("display.max_rows", 7,"display.max_columns", 7):
+            self.assertTrue(has_doubly_truncated_repr(df))
+
 
     def test_to_html_with_col_space(self):
         def check_with_width(df, col_space):
@@ -507,7 +582,7 @@ class TestDataFrameFormatting(tm.TestCase):
     </tr>
   </tbody>
 </table>"""
-            self.assertEquals(result, expected)
+            self.assertEqual(result, expected)
 
             df = DataFrame([[0, 1], [2, 3], [4, 5], [6, 7]],
                            columns=index[::2], index=index)
@@ -562,7 +637,7 @@ class TestDataFrameFormatting(tm.TestCase):
     </tr>
   </tbody>
 </table>"""
-            self.assertEquals(result, expected)
+            self.assertEqual(result, expected)
 
     def test_to_html_multiindex_sparsify(self):
         index = pd.MultiIndex.from_arrays([[0, 0, 1, 1], [0, 1, 0, 1]],
@@ -611,7 +686,7 @@ class TestDataFrameFormatting(tm.TestCase):
     </tr>
   </tbody>
 </table>"""
-        self.assertEquals(result, expected)
+        self.assertEqual(result, expected)
 
         df = DataFrame([[0, 1], [2, 3], [4, 5], [6, 7]],
                        columns=index[::2], index=index)
@@ -664,7 +739,7 @@ class TestDataFrameFormatting(tm.TestCase):
     </tr>
   </tbody>
 </table>"""
-        self.assertEquals(result, expected)
+        self.assertEqual(result, expected)
 
     def test_to_html_index_formatter(self):
         df = DataFrame([[0, 1], [2, 3], [4, 5], [6, 7]],
@@ -704,13 +779,353 @@ class TestDataFrameFormatting(tm.TestCase):
     </tr>
   </tbody>
 </table>"""
-        self.assertEquals(result, expected)
+        self.assertEqual(result, expected)
+
+    def test_to_html_regression_GH6098(self):
+        df = DataFrame({u('clé1'): [u('a'), u('a'), u('b'), u('b'), u('a')],
+                           u('clé2'): [u('1er'), u('2ème'), u('1er'), u('2ème'), u('1er')],
+                           'données1': np.random.randn(5),
+                           'données2': np.random.randn(5)})
+        # it works
+        df.pivot_table(index=[u('clé1')], columns=[u('clé2')])._repr_html_()
+
+
+
+
+
+    def test_to_html_truncate(self):
+        index = pd.DatetimeIndex(start='20010101',freq='D',periods=20)
+        df = pd.DataFrame(index=index,columns=range(20))
+        fmt.set_option('display.max_rows',8)
+        fmt.set_option('display.max_columns',4)
+        result = df._repr_html_()
+        expected = '''\
+<div style="max-height:1000px;max-width:1500px;overflow:auto;">
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>0</th>
+      <th>1</th>
+      <th>...</th>
+      <th>18</th>
+      <th>19</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>2001-01-01</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+    <tr>
+      <th>2001-01-02</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+    <tr>
+      <th>2001-01-03</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+    <tr>
+      <th>2001-01-04</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+    <tr>
+      <th>...</th>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+    </tr>
+    <tr>
+      <th>2001-01-17</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+    <tr>
+      <th>2001-01-18</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+    <tr>
+      <th>2001-01-19</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+    <tr>
+      <th>2001-01-20</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+  </tbody>
+</table>
+<p>20 rows × 20 columns</p>
+</div>'''
+        if sys.version_info[0] < 3:
+            expected = expected.decode('utf-8')
+        self.assertEqual(result, expected)
+
+    def test_to_html_truncate_multi_index(self):
+        arrays = [['bar', 'bar', 'baz', 'baz', 'foo', 'foo', 'qux', 'qux'],
+                  ['one', 'two', 'one', 'two', 'one', 'two', 'one', 'two']]
+        df = pd.DataFrame(index=arrays,columns=arrays)
+        fmt.set_option('display.max_rows',7)
+        fmt.set_option('display.max_columns',7)
+        result = df._repr_html_()
+        expected = '''\
+<div style="max-height:1000px;max-width:1500px;overflow:auto;">
+<table border="1" class="dataframe">
+  <thead>
+    <tr>
+      <th></th>
+      <th></th>
+      <th colspan="2" halign="left">bar</th>
+      <th>baz</th>
+      <th>...</th>
+      <th>foo</th>
+      <th colspan="2" halign="left">qux</th>
+    </tr>
+    <tr>
+      <th></th>
+      <th></th>
+      <th>one</th>
+      <th>two</th>
+      <th>one</th>
+      <th>...</th>
+      <th>two</th>
+      <th>one</th>
+      <th>two</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th rowspan="2" valign="top">bar</th>
+      <th>one</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+    <tr>
+      <th>two</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+    <tr>
+      <th>baz</th>
+      <th>one</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+    <tr>
+      <th>...</th>
+      <th>...</th>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+    </tr>
+    <tr>
+      <th>foo</th>
+      <th>two</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+    <tr>
+      <th rowspan="2" valign="top">qux</th>
+      <th>one</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+    <tr>
+      <th>two</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+  </tbody>
+</table>
+<p>8 rows × 8 columns</p>
+</div>'''
+        if sys.version_info[0] < 3:
+            expected = expected.decode('utf-8')
+        self.assertEqual(result, expected)
+
+    def test_to_html_truncate_multi_index_sparse_off(self):
+        arrays = [['bar', 'bar', 'baz', 'baz', 'foo', 'foo', 'qux', 'qux'],
+                  ['one', 'two', 'one', 'two', 'one', 'two', 'one', 'two']]
+        df = pd.DataFrame(index=arrays,columns=arrays)
+        fmt.set_option('display.max_rows',7)
+        fmt.set_option('display.max_columns',7)
+        fmt.set_option('display.multi_sparse',False)
+        result = df._repr_html_()
+        expected = '''\
+<div style="max-height:1000px;max-width:1500px;overflow:auto;">
+<table border="1" class="dataframe">
+  <thead>
+    <tr>
+      <th></th>
+      <th></th>
+      <th>bar</th>
+      <th>bar</th>
+      <th>baz</th>
+      <th>...</th>
+      <th>foo</th>
+      <th>qux</th>
+      <th>qux</th>
+    </tr>
+    <tr>
+      <th></th>
+      <th></th>
+      <th>one</th>
+      <th>two</th>
+      <th>one</th>
+      <th>...</th>
+      <th>two</th>
+      <th>one</th>
+      <th>two</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>bar</th>
+      <th>one</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+    <tr>
+      <th>bar</th>
+      <th>two</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+    <tr>
+      <th>baz</th>
+      <th>one</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+    <tr>
+      <th>foo</th>
+      <th>two</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+    <tr>
+      <th>qux</th>
+      <th>one</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+    <tr>
+      <th>qux</th>
+      <th>two</th>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td>...</td>
+      <td> NaN</td>
+      <td> NaN</td>
+      <td> NaN</td>
+    </tr>
+  </tbody>
+</table>
+<p>8 rows × 8 columns</p>
+</div>'''
+        if sys.version_info[0] < 3:
+            expected = expected.decode('utf-8')
+        self.assertEqual(result, expected)
+
+
 
     def test_nonunicode_nonascii_alignment(self):
         df = DataFrame([["aa\xc3\xa4\xc3\xa4", 1], ["bbbb", 2]])
         rep_str = df.to_string()
         lines = rep_str.split('\n')
-        self.assert_(len(lines[1]) == len(lines[2]))
+        self.assertEqual(len(lines[1]), len(lines[2]))
 
     def test_unicode_problem_decoding_as_ascii(self):
         dm = DataFrame({u('c/\u03c3'): Series({'test': np.NaN})})
@@ -743,21 +1158,21 @@ class TestDataFrameFormatting(tm.TestCase):
         if PY3:
             raise nose.SkipTest("doesn't work on Python 3")
 
-        self.assertEquals(pp_t('a') , u('a'))
-        self.assertEquals(pp_t(u('a')) , u('a'))
-        self.assertEquals(pp_t(None) , 'None')
-        self.assertEquals(pp_t(u('\u05d0'), quote_strings=True),
+        self.assertEqual(pp_t('a') , u('a'))
+        self.assertEqual(pp_t(u('a')) , u('a'))
+        self.assertEqual(pp_t(None) , 'None')
+        self.assertEqual(pp_t(u('\u05d0'), quote_strings=True),
                           u("u'\u05d0'"))
-        self.assertEquals(pp_t(u('\u05d0'), quote_strings=False),
+        self.assertEqual(pp_t(u('\u05d0'), quote_strings=False),
                           u('\u05d0'))
-        self.assertEquals(pp_t((u('\u05d0'),
+        self.assertEqual(pp_t((u('\u05d0'),
                                 u('\u05d1')), quote_strings=True),
                           u("(u'\u05d0', u'\u05d1')"))
-        self.assertEquals(pp_t((u('\u05d0'), (u('\u05d1'),
+        self.assertEqual(pp_t((u('\u05d0'), (u('\u05d1'),
                                                   u('\u05d2'))),
                                quote_strings=True),
                           u("(u'\u05d0', (u'\u05d1', u'\u05d2'))"))
-        self.assertEquals(pp_t(('foo', u('\u05d0'), (u('\u05d0'),
+        self.assertEqual(pp_t(('foo', u('\u05d0'), (u('\u05d0'),
                                                          u('\u05d0'))),
                                quote_strings=True),
                           u("(u'foo', u'\u05d0', (u'\u05d0', u'\u05d0'))"))
@@ -767,21 +1182,21 @@ class TestDataFrameFormatting(tm.TestCase):
         self.assertTrue(not "\t" in pp_t("a\tb", escape_chars=("\t",)))
 
     def test_wide_repr(self):
-        with option_context('mode.sim_interactive', True):
+        with option_context('mode.sim_interactive', True, 'display.show_dimensions', True):
             col = lambda l, k: [tm.rands(k) for _ in range(l)]
             max_cols = get_option('display.max_columns')
-            df = DataFrame([col(max_cols-1, 25) for _ in range(10)])
+            df = DataFrame([col(max_cols - 1, 25) for _ in range(10)])
             set_option('display.expand_frame_repr', False)
             rep_str = repr(df)
-            print(rep_str)
-            assert "10 rows x %d columns" % (max_cols-1) in rep_str
+
+            assert "10 rows x %d columns" % (max_cols - 1) in rep_str
             set_option('display.expand_frame_repr', True)
             wide_repr = repr(df)
-            self.assert_(rep_str != wide_repr)
+            self.assertNotEqual(rep_str, wide_repr)
 
             with option_context('display.width', 120):
                 wider_repr = repr(df)
-                self.assert_(len(wider_repr) < len(wide_repr))
+                self.assertTrue(len(wider_repr) < len(wide_repr))
 
         reset_option('display.expand_frame_repr')
 
@@ -790,7 +1205,7 @@ class TestDataFrameFormatting(tm.TestCase):
             df = DataFrame(randn(5, 3), columns=['a' * 90, 'b' * 90, 'c' * 90])
             rep_str = repr(df)
 
-            self.assertEqual(len(rep_str.splitlines()), 22)
+            self.assertEqual(len(rep_str.splitlines()), 20)
 
     def test_wide_repr_named(self):
         with option_context('mode.sim_interactive', True):
@@ -803,14 +1218,14 @@ class TestDataFrameFormatting(tm.TestCase):
             rep_str = repr(df)
             set_option('display.expand_frame_repr', True)
             wide_repr = repr(df)
-            self.assert_(rep_str != wide_repr)
+            self.assertNotEqual(rep_str, wide_repr)
 
             with option_context('display.width', 150):
                 wider_repr = repr(df)
-                self.assert_(len(wider_repr) < len(wide_repr))
+                self.assertTrue(len(wider_repr) < len(wide_repr))
 
             for line in wide_repr.splitlines()[1::13]:
-                self.assert_('DataFrame Index' in line)
+                self.assertIn('DataFrame Index', line)
 
         reset_option('display.expand_frame_repr')
 
@@ -827,14 +1242,14 @@ class TestDataFrameFormatting(tm.TestCase):
             rep_str = repr(df)
             set_option('display.expand_frame_repr', True)
             wide_repr = repr(df)
-            self.assert_(rep_str != wide_repr)
+            self.assertNotEqual(rep_str, wide_repr)
 
             with option_context('display.width', 150):
                 wider_repr = repr(df)
-                self.assert_(len(wider_repr) < len(wide_repr))
+                self.assertTrue(len(wider_repr) < len(wide_repr))
 
             for line in wide_repr.splitlines()[1::13]:
-                self.assert_('Level 0 Level 1' in line)
+                self.assertIn('Level 0 Level 1', line)
 
         reset_option('display.expand_frame_repr')
 
@@ -853,11 +1268,11 @@ class TestDataFrameFormatting(tm.TestCase):
             rep_str = repr(df)
             set_option('display.expand_frame_repr', True)
             wide_repr = repr(df)
-            self.assert_(rep_str != wide_repr)
+            self.assertNotEqual(rep_str, wide_repr)
 
         with option_context('display.width', 150):
             wider_repr = repr(df)
-            self.assert_(len(wider_repr) < len(wide_repr))
+            self.assertTrue(len(wider_repr) < len(wide_repr))
 
         reset_option('display.expand_frame_repr')
 
@@ -870,11 +1285,11 @@ class TestDataFrameFormatting(tm.TestCase):
             rep_str = repr(df)
             set_option('display.expand_frame_repr', True)
             wide_repr = repr(df)
-            self.assert_(rep_str != wide_repr)
+            self.assertNotEqual(rep_str, wide_repr)
 
             with option_context('display.width', 150):
                 wider_repr = repr(df)
-                self.assert_(len(wider_repr) < len(wide_repr))
+                self.assertTrue(len(wider_repr) < len(wide_repr))
 
         reset_option('display.expand_frame_repr')
 
@@ -894,7 +1309,7 @@ class TestDataFrameFormatting(tm.TestCase):
         import re
         str_rep = str(s)
         nmatches = len(re.findall('dtype',str_rep))
-        self.assert_(nmatches == 1)
+        self.assertEqual(nmatches, 1)
 
     def test_index_with_nan(self):
         #  GH 2850
@@ -958,7 +1373,7 @@ class TestDataFrameFormatting(tm.TestCase):
 
         buf = StringIO()
         retval = biggie.to_string(buf=buf)
-        self.assert_(retval is None)
+        self.assertIsNone(retval)
         self.assertEqual(buf.getvalue(), s)
 
         tm.assert_isinstance(s, compat.string_types)
@@ -973,8 +1388,8 @@ class TestDataFrameFormatting(tm.TestCase):
                             header=None, sep=' ')
         tm.assert_series_equal(recons['B'], biggie['B'])
         self.assertEqual(recons['A'].count(), biggie['A'].count())
-        self.assert_((np.abs(recons['A'].dropna() -
-                             biggie['A'].dropna()) < 0.1).all())
+        self.assertTrue((np.abs(recons['A'].dropna() -
+                                biggie['A'].dropna()) < 0.1).all())
 
         # expected = ['B', 'A']
         # self.assertEqual(header, expected)
@@ -1013,7 +1428,7 @@ class TestDataFrameFormatting(tm.TestCase):
         assert(df_s == expected)
 
     def test_to_string_float_formatting(self):
-        fmt.reset_option('^display.')
+        self.reset_display_options()
         fmt.set_option('display.precision', 6, 'display.column_space',
                        12, 'display.notebook_repr_html', False)
 
@@ -1044,7 +1459,7 @@ class TestDataFrameFormatting(tm.TestCase):
                     '1     0.253')
         assert(df_s == expected)
 
-        fmt.reset_option('^display.')
+        self.reset_display_options()
         self.assertEqual(get_option("display.precision"), 7)
 
         df = DataFrame({'x': [1e9, 0.2512]})
@@ -1112,7 +1527,7 @@ class TestDataFrameFormatting(tm.TestCase):
 
     def test_to_string_int_formatting(self):
         df = DataFrame({'x': [-15, 20, 25, -35]})
-        self.assert_(issubclass(df['x'].dtype.type, np.integer))
+        self.assertTrue(issubclass(df['x'].dtype.type, np.integer))
 
         output = df.to_string()
         expected = ('    x\n'
@@ -1136,7 +1551,7 @@ c  10  11  12  13  14\
         self.assertEqual(rs, xp)
 
     def test_to_string_left_justify_cols(self):
-        fmt.reset_option('^display.')
+        self.reset_display_options()
         df = DataFrame({'x': [3234, 0.253]})
         df_s = df.to_string(justify='left')
         expected = ('   x       \n'
@@ -1145,7 +1560,7 @@ c  10  11  12  13  14\
         assert(df_s == expected)
 
     def test_to_string_format_na(self):
-        fmt.reset_option('^display.')
+        self.reset_display_options()
         df = DataFrame({'A': [np.nan, -1, -2.1234, 3, 4],
                         'B': [np.nan, 'foo', 'foooo', 'fooooo', 'bar']})
         result = df.to_string()
@@ -1175,6 +1590,26 @@ c  10  11  12  13  14\
         s = df.to_string(line_width=80)
         self.assertEqual(max(len(l) for l in s.split('\n')), 80)
 
+    def test_show_dimensions(self):
+        df = pd.DataFrame(123, lrange(10, 15), lrange(30))
+
+        with option_context('display.max_rows', 10, 'display.max_columns', 40, 'display.width',
+                            500, 'display.expand_frame_repr', 'info', 'display.show_dimensions', True):
+            self.assertTrue('5 rows' in str(df))
+            self.assertTrue('5 rows' in df._repr_html_())
+        with option_context('display.max_rows', 10, 'display.max_columns', 40, 'display.width',
+                            500, 'display.expand_frame_repr', 'info', 'display.show_dimensions', False):
+            self.assertFalse('5 rows' in str(df))
+            self.assertFalse('5 rows' in df._repr_html_())
+        with option_context('display.max_rows', 2, 'display.max_columns', 2, 'display.width',
+                            500, 'display.expand_frame_repr', 'info', 'display.show_dimensions', 'truncate'):
+            self.assertTrue('5 rows' in str(df))
+            self.assertTrue('5 rows' in df._repr_html_())
+        with option_context('display.max_rows', 10, 'display.max_columns', 40, 'display.width',
+                            500, 'display.expand_frame_repr', 'info', 'display.show_dimensions', 'truncate'):
+            self.assertFalse('5 rows' in str(df))
+            self.assertFalse('5 rows' in df._repr_html_())
+
     def test_to_html(self):
         # big mixed
         biggie = DataFrame({'A': randn(200),
@@ -1187,7 +1622,7 @@ c  10  11  12  13  14\
 
         buf = StringIO()
         retval = biggie.to_html(buf=buf)
-        self.assert_(retval is None)
+        self.assertIsNone(retval)
         self.assertEqual(buf.getvalue(), s)
 
         tm.assert_isinstance(s, compat.string_types)
@@ -1230,7 +1665,7 @@ c  10  11  12  13  14\
 
     def test_to_html_columns_arg(self):
         result = self.frame.to_html(columns=['A'])
-        self.assert_('<th>B</th>' not in result)
+        self.assertNotIn('<th>B</th>', result)
 
     def test_to_html_multiindex(self):
         columns = pandas.MultiIndex.from_tuples(list(zip(np.arange(2).repeat(2),
@@ -1396,13 +1831,13 @@ c  10  11  12  13  14\
                               index=index)
         result = df.to_html(index=False)
         for i in index:
-            self.assert_(i not in result)
+            self.assertNotIn(i, result)
 
         tuples = [('foo', 'car'), ('foo', 'bike'), ('bar', 'car')]
         df.index = pandas.MultiIndex.from_tuples(tuples)
         result = df.to_html(index=False)
         for i in ['foo', 'bar', 'car', 'bike']:
-            self.assert_(i not in result)
+            self.assertNotIn(i, result)
 
     def test_repr_html(self):
         self.frame._repr_html_()
@@ -1413,7 +1848,15 @@ c  10  11  12  13  14\
         fmt.set_option('display.notebook_repr_html', False)
         self.frame._repr_html_()
 
-        fmt.reset_option('^display.')
+        self.reset_display_options()
+
+        df = DataFrame([[1, 2], [3, 4]])
+        fmt.set_option('display.show_dimensions', True)
+        self.assertTrue('2 rows' in df._repr_html_())
+        fmt.set_option('display.show_dimensions', False)
+        self.assertFalse('2 rows' in df._repr_html_())
+
+        self.reset_display_options()
 
     def test_repr_html_wide(self):
         row = lambda l, k: [tm.rands(k) for _ in range(l)]
@@ -1448,14 +1891,14 @@ c  10  11  12  13  14\
         h = max_rows - 1
         df = pandas.DataFrame({'A':np.arange(1,1+h), 'B':np.arange(41, 41+h)})
         reg_repr = df._repr_html_()
-        assert '...' not in reg_repr
-        assert str(40 + h) in reg_repr
+        assert '..' not in reg_repr
+        assert str(41 + max_rows // 2) in reg_repr
 
         h = max_rows + 1
         df = pandas.DataFrame({'A':np.arange(1,1+h), 'B':np.arange(41, 41+h)})
         long_repr = df._repr_html_()
-        assert '...' in long_repr
-        assert str(40 + h) not in long_repr
+        assert '..' in long_repr
+        assert str(41 + max_rows // 2) not in long_repr
         assert u('%d rows ') % h in long_repr
         assert u('2 columns') in long_repr
 
@@ -1464,14 +1907,14 @@ c  10  11  12  13  14\
         h = max_rows - 1
         df = pandas.DataFrame({'idx':np.linspace(-10,10,h), 'A':np.arange(1,1+h), 'B': np.arange(41, 41+h) }).set_index('idx')
         reg_repr = df._repr_html_()
-        assert '...' not in reg_repr
+        assert '..' not in reg_repr
         assert str(40 + h) in reg_repr
 
         h = max_rows + 1
         df = pandas.DataFrame({'idx':np.linspace(-10,10,h), 'A':np.arange(1,1+h), 'B': np.arange(41, 41+h) }).set_index('idx')
         long_repr = df._repr_html_()
-        assert '...' in long_repr
-        assert str(40 + h) not in long_repr
+        assert '..' in long_repr
+        assert '31' not in long_repr
         assert u('%d rows ') % h in long_repr
         assert u('2 columns') in long_repr
 
@@ -1518,9 +1961,25 @@ c  10  11  12  13  14\
         # Wide
         h, w = max_rows-1, max_cols+1
         df = pandas.DataFrame(dict((k,np.arange(1,1+h)) for k in np.arange(w)))
-        assert has_vertically_truncated_repr(df)
+        assert has_horizontally_truncated_repr(df)
         with option_context('display.large_repr', 'info'):
             assert has_info_repr(df)
+
+    def test_info_repr_max_cols(self):
+        # GH #6939
+        df = DataFrame(randn(10, 5))
+        with option_context('display.large_repr', 'info',
+                            'display.max_columns', 1,
+                            'display.max_info_columns', 4):
+            self.assertTrue(has_non_verbose_info_repr(df))
+
+        with option_context('display.large_repr', 'info',
+                            'display.max_columns', 1,
+                            'display.max_info_columns', 5):
+            self.assertFalse(has_non_verbose_info_repr(df))
+
+        # test verbose overrides
+        # fmt.set_option('display.max_info_columns', 4)  # exceeded
 
     def test_info_repr_html(self):
         max_rows = get_option('display.max_rows')
@@ -1528,16 +1987,16 @@ c  10  11  12  13  14\
         # Long
         h, w = max_rows+1, max_cols-1
         df = pandas.DataFrame(dict((k,np.arange(1,1+h)) for k in np.arange(w)))
-        assert '<class' not in df._repr_html_()
+        assert r'&lt;class' not in df._repr_html_()
         with option_context('display.large_repr', 'info'):
-            assert '<class' in df._repr_html_()
+            assert r'&lt;class' in df._repr_html_()
 
         # Wide
         h, w = max_rows-1, max_cols+1
         df = pandas.DataFrame(dict((k,np.arange(1,1+h)) for k in np.arange(w)))
         assert '<class' not in df._repr_html_()
         with option_context('display.large_repr', 'info'):
-            assert '<class' in df._repr_html_()
+            assert '&lt;class' in df._repr_html_()
 
     def test_fake_qtconsole_repr_html(self):
         def get_ipython():
@@ -1546,13 +2005,13 @@ c  10  11  12  13  14\
                    {'parent_appname': 'ipython-qtconsole'}}}
 
         repstr = self.frame._repr_html_()
-        self.assert_(repstr is not None)
+        self.assertIsNotNone(repstr)
 
         fmt.set_option('display.max_rows', 5, 'display.max_columns', 2)
         repstr = self.frame._repr_html_()
-        self.assert_('class' in repstr)  # info fallback
+        self.assertIn('class', repstr)  # info fallback
 
-        fmt.reset_option('^display.')
+        self.reset_display_options()
 
     def test_to_html_with_classes(self):
         df = pandas.DataFrame()
@@ -1560,11 +2019,12 @@ c  10  11  12  13  14\
         expected = dedent("""
 
             <table border="1" class="dataframe sortable draggable">
-              <tbody>
-                <tr>
-                  <td>Index([], dtype='object')</td>
-                  <td>Empty DataFrame</td>
+              <thead>
+                <tr style="text-align: right;">
+                  <th></th>
                 </tr>
+              </thead>
+              <tbody>
               </tbody>
             </table>
 
@@ -1593,9 +2053,9 @@ c  10  11  12  13  14\
             if line.startswith('dtype:'):
                 continue
             if _three_digit_exp():
-                self.assert_(('+010' in line) or skip)
+                self.assertTrue(('+010' in line) or skip)
             else:
-                self.assert_(('+10' in line) or skip)
+                self.assertTrue(('+10' in line) or skip)
             skip = False
 
     def test_dict_entries(self):
@@ -1642,6 +2102,206 @@ c  10  11  12  13  14\
 """
         self.assertEqual(withoutindex_result, withoutindex_expected)
 
+    def test_to_latex_escape(self):
+        a = 'a'
+        b = 'b'
+
+        test_dict = {u('co^l1')  : {a: "a",
+                                    b: "b"},
+                     u('co$e^x$'): {a: "a",
+                                    b: "b"}}
+
+        unescaped_result = pd.DataFrame(test_dict).to_latex(escape=False)
+        escaped_result   = pd.DataFrame(test_dict).to_latex() # default: escape=True
+
+        unescaped_expected = r'''\begin{tabular}{lll}
+\toprule
+{} & co$e^x$ & co^l1 \\
+\midrule
+a &       a &     a \\
+b &       b &     b \\
+\bottomrule
+\end{tabular}
+'''
+
+        escaped_expected = r'''\begin{tabular}{lll}
+\toprule
+{} & co\$e\textasciicircumx\$ & co\textasciicircuml1 \\
+\midrule
+a &       a &     a \\
+b &       b &     b \\
+\bottomrule
+\end{tabular}
+'''
+        self.assertEqual(unescaped_result, unescaped_expected)
+        self.assertEqual(escaped_result, escaped_expected)
+
+    def test_to_latex_longtable(self):
+        self.frame.to_latex(longtable=True)
+
+        df = DataFrame({'a': [1, 2],
+                        'b': ['b1', 'b2']})
+        withindex_result = df.to_latex(longtable=True)
+        withindex_expected = r"""\begin{longtable}{lrl}
+\toprule
+{} &  a &   b \\
+\midrule
+\endhead
+\midrule
+\multicolumn{3}{r}{{Continued on next page}} \\
+\midrule
+\endfoot
+
+\bottomrule
+\endlastfoot
+0 &  1 &  b1 \\
+1 &  2 &  b2 \\
+\end{longtable}
+"""
+        self.assertEqual(withindex_result, withindex_expected)
+
+        withoutindex_result = df.to_latex(index=False, longtable=True)
+        withoutindex_expected = r"""\begin{longtable}{rl}
+\toprule
+ a &   b \\
+\midrule
+\endhead
+\midrule
+\multicolumn{3}{r}{{Continued on next page}} \\
+\midrule
+\endfoot
+
+\bottomrule
+\endlastfoot
+ 1 &  b1 \\
+ 2 &  b2 \\
+\end{longtable}
+"""
+        self.assertEqual(withoutindex_result, withoutindex_expected)
+
+    def test_to_latex_escape_special_chars(self):
+        special_characters = ['&','%','$','#','_',
+                               '{','}','~','^','\\']
+        df = DataFrame(data=special_characters)
+        observed = df.to_latex()
+        expected = r"""\begin{tabular}{ll}
+\toprule
+{} &  0 \\
+\midrule
+0 &  \& \\
+1 &  \% \\
+2 &  \$ \\
+3 &  \# \\
+4 &  \_ \\
+5 &  \{ \\
+6 &  \} \\
+7 &  \textasciitilde \\
+8 &  \textasciicircum \\
+9 &  \textbackslash \\
+\bottomrule
+\end{tabular}
+"""
+        self.assertEqual(observed, expected)
+
+    def test_to_csv_quotechar(self):
+        df = DataFrame({'col' : [1,2]})
+        expected = """\
+"","col"
+"0","1"
+"1","2"
+"""
+        with tm.ensure_clean('test.csv') as path:
+            df.to_csv(path, quoting=1) # 1=QUOTE_ALL
+            with open(path, 'r') as f:
+                self.assertEqual(f.read(), expected)
+        with tm.ensure_clean('test.csv') as path:
+            df.to_csv(path, quoting=1, engine='python')
+            with open(path, 'r') as f:
+                self.assertEqual(f.read(), expected)
+
+        expected = """\
+$$,$col$
+$0$,$1$
+$1$,$2$
+"""
+        with tm.ensure_clean('test.csv') as path:
+            df.to_csv(path, quoting=1, quotechar="$")
+            with open(path, 'r') as f:
+                self.assertEqual(f.read(), expected)
+        with tm.ensure_clean('test.csv') as path:
+            df.to_csv(path, quoting=1, quotechar="$", engine='python')
+            with open(path, 'r') as f:
+                self.assertEqual(f.read(), expected)
+
+        with tm.ensure_clean('test.csv') as path:
+            with tm.assertRaisesRegexp(TypeError, 'quotechar'):
+                df.to_csv(path, quoting=1, quotechar=None)
+        with tm.ensure_clean('test.csv') as path:
+            with tm.assertRaisesRegexp(TypeError, 'quotechar'):
+                df.to_csv(path, quoting=1, quotechar=None, engine='python')
+
+    def test_to_csv_doublequote(self):
+        df = DataFrame({'col' : ['a"a', '"bb"']})
+        expected = '''\
+"","col"
+"0","a""a"
+"1","""bb"""
+'''
+        with tm.ensure_clean('test.csv') as path:
+            df.to_csv(path, quoting=1, doublequote=True) # QUOTE_ALL
+            with open(path, 'r') as f:
+                self.assertEqual(f.read(), expected)
+        with tm.ensure_clean('test.csv') as path:
+            df.to_csv(path, quoting=1, doublequote=True, engine='python')
+            with open(path, 'r') as f:
+                self.assertEqual(f.read(), expected)
+
+        from _csv import Error
+        with tm.ensure_clean('test.csv') as path:
+            with tm.assertRaisesRegexp(Error, 'escapechar'):
+                df.to_csv(path, doublequote=False) # no escapechar set
+        with tm.ensure_clean('test.csv') as path:
+            with tm.assertRaisesRegexp(Error, 'escapechar'):
+                df.to_csv(path, doublequote=False, engine='python')
+
+    def test_to_csv_escapechar(self):
+        df = DataFrame({'col' : ['a"a', '"bb"']})
+        expected = """\
+"","col"
+"0","a\\"a"
+"1","\\"bb\\""
+"""
+        with tm.ensure_clean('test.csv') as path:   # QUOTE_ALL
+            df.to_csv(path, quoting=1, doublequote=False, escapechar='\\')
+            with open(path, 'r') as f:
+                self.assertEqual(f.read(), expected)
+        with tm.ensure_clean('test.csv') as path:
+            df.to_csv(path, quoting=1, doublequote=False, escapechar='\\',
+                      engine='python')
+            with open(path, 'r') as f:
+                self.assertEqual(f.read(), expected)
+
+        df = DataFrame({'col' : ['a,a', ',bb,']})
+        expected = """\
+,col
+0,a\\,a
+1,\\,bb\\,
+"""
+        with tm.ensure_clean('test.csv') as path:
+            df.to_csv(path, quoting=3, escapechar='\\') # QUOTE_NONE
+            with open(path, 'r') as f:
+                self.assertEqual(f.read(), expected)
+        with tm.ensure_clean('test.csv') as path:
+            df.to_csv(path, quoting=3, escapechar='\\', engine='python')
+            with open(path, 'r') as f:
+                self.assertEqual(f.read(), expected)
+
+    def test_csv_to_string(self):
+        df = DataFrame({'col' : [1,2]})
+        expected = ',col\n0,1\n1,2\n'
+        self.assertEqual(df.to_csv(), expected)
+
+
 class TestSeriesFormatting(tm.TestCase):
     _multiprocess_can_split_ = True
 
@@ -1662,7 +2322,7 @@ class TestSeriesFormatting(tm.TestCase):
         s = self.ts.to_string()
 
         retval = self.ts.to_string(buf=buf)
-        self.assert_(retval is None)
+        self.assertIsNone(retval)
         self.assertEqual(buf.getvalue().strip(), s)
 
         # pass float_format
@@ -1743,13 +2403,13 @@ class TestSeriesFormatting(tm.TestCase):
             if line.startswith('dtype:'):
                 continue
             if _three_digit_exp():
-                self.assert_('+010' in line)
+                self.assertIn('+010', line)
             else:
-                self.assert_('+10' in line)
+                self.assertIn('+10', line)
 
     def test_datetimeindex(self):
 
-        from pandas import date_range, NaT, Timestamp
+        from pandas import date_range, NaT
         index = date_range('20130102',periods=6)
         s = Series(1,index=index)
         result = s.to_string()
@@ -1779,32 +2439,33 @@ class TestSeriesFormatting(tm.TestCase):
         # adding NaTs
         y = s-s.shift(1)
         result = y.to_string()
-        self.assertTrue('1 days, 00:00:00' in result)
+        self.assertTrue('1 days' in result)
+        self.assertTrue('00:00:00' not in result)
         self.assertTrue('NaT' in result)
 
         # with frac seconds
         o = Series([datetime(2012,1,1,microsecond=150)]*3)
         y = s-o
         result = y.to_string()
-        self.assertTrue('-00:00:00.000150' in result)
+        self.assertTrue('-0 days, 00:00:00.000150' in result)
 
         # rounding?
         o = Series([datetime(2012,1,1,1)]*3)
         y = s-o
         result = y.to_string()
-        self.assertTrue('-01:00:00' in result)
+        self.assertTrue('-0 days, 01:00:00' in result)
         self.assertTrue('1 days, 23:00:00' in result)
 
         o = Series([datetime(2012,1,1,1,1)]*3)
         y = s-o
         result = y.to_string()
-        self.assertTrue('-01:01:00' in result)
+        self.assertTrue('-0 days, 01:01:00' in result)
         self.assertTrue('1 days, 22:59:00' in result)
 
         o = Series([datetime(2012,1,1,1,1,microsecond=150)]*3)
         y = s-o
         result = y.to_string()
-        self.assertTrue('-01:01:00.000150' in result)
+        self.assertTrue('-0 days, 01:01:00.000150' in result)
         self.assertTrue('1 days, 22:58:59.999850' in result)
 
         # neg time
@@ -1828,6 +2489,42 @@ class TestSeriesFormatting(tm.TestCase):
         result = repr(df.ix[0])
         self.assertTrue('2012-01-01' in result)
 
+    def test_max_multi_index_display(self):
+        # GH 7101
+
+        # doc example (indexing.rst)
+
+        # multi-index
+        arrays = [['bar', 'bar', 'baz', 'baz', 'foo', 'foo', 'qux', 'qux'],
+                  ['one', 'two', 'one', 'two', 'one', 'two', 'one', 'two']]
+        tuples = list(zip(*arrays))
+        index = MultiIndex.from_tuples(tuples, names=['first', 'second'])
+        s = Series(randn(8), index=index)
+
+        with option_context("display.max_rows", 10):
+            self.assertEqual(len(str(s).split('\n')),10)
+        with option_context("display.max_rows", 3):
+            self.assertEqual(len(str(s).split('\n')),5)
+        with option_context("display.max_rows", 2):
+            self.assertEqual(len(str(s).split('\n')),5)
+        with option_context("display.max_rows", 1):
+            self.assertEqual(len(str(s).split('\n')),5)
+        with option_context("display.max_rows", 0):
+            self.assertEqual(len(str(s).split('\n')),10)
+
+        # index
+        s = Series(randn(8), None)
+
+        with option_context("display.max_rows", 10):
+            self.assertEqual(len(str(s).split('\n')),9)
+        with option_context("display.max_rows", 3):
+            self.assertEqual(len(str(s).split('\n')),4)
+        with option_context("display.max_rows", 2):
+            self.assertEqual(len(str(s).split('\n')),4)
+        with option_context("display.max_rows", 1):
+            self.assertEqual(len(str(s).split('\n')),4)
+        with option_context("display.max_rows", 0):
+            self.assertEqual(len(str(s).split('\n')),9)
 
 class TestEngFormatter(tm.TestCase):
     _multiprocess_can_split_ = True
@@ -1862,7 +2559,7 @@ class TestEngFormatter(tm.TestCase):
                     '3    1E+06')
         self.assertEqual(result, expected)
 
-        fmt.reset_option('^display.')
+        self.reset_display_options()
 
     def compare(self, formatter, input, output):
         formatted_input = formatter(input)
@@ -2039,6 +2736,226 @@ class TestFloatArrayFormatter(tm.TestCase):
     def test_misc(self):
         obj = fmt.FloatArrayFormatter(np.array([], dtype=np.float64))
         result = obj.get_result()
+        self.assertTrue(len(result) == 0)
+
+    def test_format(self):
+        obj = fmt.FloatArrayFormatter(np.array([12, 0], dtype=np.float64))
+        result = obj.get_result()
+        self.assertEqual(result[0], " 12")
+        self.assertEqual(result[1], "  0")
+
+
+class TestRepr_timedelta64(tm.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        skip_if_np_version_under1p7()
+
+    def test_legacy(self):
+        delta_1d = pd.to_timedelta(1, unit='D')
+        delta_0d = pd.to_timedelta(0, unit='D')
+        delta_1s = pd.to_timedelta(1, unit='s')
+        delta_500ms = pd.to_timedelta(500, unit='ms')
+
+        self.assertEqual(tslib.repr_timedelta64(delta_1d), "1 days, 00:00:00")
+        self.assertEqual(tslib.repr_timedelta64(-delta_1d), "-1 days, 00:00:00")
+        self.assertEqual(tslib.repr_timedelta64(delta_0d), "00:00:00")
+        self.assertEqual(tslib.repr_timedelta64(delta_1s), "00:00:01")
+        self.assertEqual(tslib.repr_timedelta64(delta_500ms), "00:00:00.500000")
+        self.assertEqual(tslib.repr_timedelta64(delta_1d + delta_1s), "1 days, 00:00:01")
+        self.assertEqual(tslib.repr_timedelta64(delta_1d + delta_500ms), "1 days, 00:00:00.500000")
+
+    def test_short(self):
+        delta_1d = pd.to_timedelta(1, unit='D')
+        delta_0d = pd.to_timedelta(0, unit='D')
+        delta_1s = pd.to_timedelta(1, unit='s')
+        delta_500ms = pd.to_timedelta(500, unit='ms')
+
+        self.assertEqual(tslib.repr_timedelta64(delta_1d, format='short'), "1 days")
+        self.assertEqual(tslib.repr_timedelta64(-delta_1d, format='short'), "-1 days")
+        self.assertEqual(tslib.repr_timedelta64(delta_0d, format='short'), "00:00:00")
+        self.assertEqual(tslib.repr_timedelta64(delta_1s, format='short'), "00:00:01")
+        self.assertEqual(tslib.repr_timedelta64(delta_500ms, format='short'), "00:00:00.500000")
+        self.assertEqual(tslib.repr_timedelta64(delta_1d + delta_1s, format='short'), "1 days, 00:00:01")
+        self.assertEqual(tslib.repr_timedelta64(delta_1d + delta_500ms, format='short'), "1 days, 00:00:00.500000")
+
+    def test_long(self):
+        delta_1d = pd.to_timedelta(1, unit='D')
+        delta_0d = pd.to_timedelta(0, unit='D')
+        delta_1s = pd.to_timedelta(1, unit='s')
+        delta_500ms = pd.to_timedelta(500, unit='ms')
+
+        self.assertEqual(tslib.repr_timedelta64(delta_1d, format='long'), "1 days, 00:00:00")
+        self.assertEqual(tslib.repr_timedelta64(-delta_1d, format='long'), "-1 days, 00:00:00")
+        self.assertEqual(tslib.repr_timedelta64(delta_0d, format='long'), "0 days, 00:00:00")
+        self.assertEqual(tslib.repr_timedelta64(delta_1s, format='long'), "0 days, 00:00:01")
+        self.assertEqual(tslib.repr_timedelta64(delta_500ms, format='long'), "0 days, 00:00:00.500000")
+        self.assertEqual(tslib.repr_timedelta64(delta_1d + delta_1s, format='long'), "1 days, 00:00:01")
+        self.assertEqual(tslib.repr_timedelta64(delta_1d + delta_500ms, format='long'), "1 days, 00:00:00.500000")
+
+
+class TestTimedelta64Formatter(tm.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        skip_if_np_version_under1p7()
+
+    def test_mixed(self):
+        x = pd.to_timedelta(list(range(5)) + [pd.NaT], unit='D')
+        y = pd.to_timedelta(list(range(5)) + [pd.NaT], unit='s')
+        result = fmt.Timedelta64Formatter(x + y).get_result()
+        self.assertEqual(result[0].strip(), "0 days, 00:00:00")
+        self.assertEqual(result[1].strip(), "1 days, 00:00:01")
+
+    def test_mixed_neg(self):
+        x = pd.to_timedelta(list(range(5)) + [pd.NaT], unit='D')
+        y = pd.to_timedelta(list(range(5)) + [pd.NaT], unit='s')
+        result = fmt.Timedelta64Formatter(-(x + y)).get_result()
+        self.assertEqual(result[0].strip(), "0 days, 00:00:00")
+        self.assertEqual(result[1].strip(), "-1 days, 00:00:01")
+
+    def test_days(self):
+        x = pd.to_timedelta(list(range(5)) + [pd.NaT], unit='D')
+        result = fmt.Timedelta64Formatter(x).get_result()
+        self.assertEqual(result[0].strip(), "0 days")
+        self.assertEqual(result[1].strip(), "1 days")
+
+        result = fmt.Timedelta64Formatter(x[1:2]).get_result()
+        self.assertEqual(result[0].strip(), "1 days")
+
+    def test_days_neg(self):
+        x = pd.to_timedelta(list(range(5)) + [pd.NaT], unit='D')
+        result = fmt.Timedelta64Formatter(-x).get_result()
+        self.assertEqual(result[0].strip(), "0 days")
+        self.assertEqual(result[1].strip(), "-1 days")
+
+    def test_subdays(self):
+        y = pd.to_timedelta(list(range(5)) + [pd.NaT], unit='s')
+        result = fmt.Timedelta64Formatter(y).get_result()
+        self.assertEqual(result[0].strip(), "00:00:00")
+        self.assertEqual(result[1].strip(), "00:00:01")
+
+    def test_subdays_neg(self):
+        y = pd.to_timedelta(list(range(5)) + [pd.NaT], unit='s')
+        result = fmt.Timedelta64Formatter(-y).get_result()
+        self.assertEqual(result[0].strip(), "00:00:00")
+        self.assertEqual(result[1].strip(), "-00:00:01")
+
+    def test_zero(self):
+        x = pd.to_timedelta(list(range(1)) + [pd.NaT], unit='D')
+        result = fmt.Timedelta64Formatter(x).get_result()
+        self.assertEqual(result[0].strip(), "0 days")
+
+        x = pd.to_timedelta(list(range(1)), unit='D')
+        result = fmt.Timedelta64Formatter(x).get_result()
+        self.assertEqual(result[0].strip(), "0 days")
+
+
+class TestDatetime64Formatter(tm.TestCase):
+    def test_mixed(self):
+        x = pd.Series([datetime(2013, 1, 1), datetime(2013, 1, 1, 12), pd.NaT])
+        result = fmt.Datetime64Formatter(x).get_result()
+        self.assertEqual(result[0].strip(), "2013-01-01 00:00:00")
+        self.assertEqual(result[1].strip(), "2013-01-01 12:00:00")
+
+    def test_dates(self):
+        x = pd.Series([datetime(2013, 1, 1), datetime(2013, 1, 2), pd.NaT])
+        result = fmt.Datetime64Formatter(x).get_result()
+        self.assertEqual(result[0].strip(), "2013-01-01")
+        self.assertEqual(result[1].strip(), "2013-01-02")
+
+    def test_date_nanos(self):
+        x = pd.Series([Timestamp(200)])
+        result = fmt.Datetime64Formatter(x).get_result()
+        self.assertEqual(result[0].strip(), "1970-01-01 00:00:00.000000200")
+
+
+class TestNaTFormatting(tm.TestCase):
+    def test_repr(self):
+        self.assertEqual(repr(pd.NaT), "NaT")
+
+    def test_str(self):
+        self.assertEqual(str(pd.NaT), "NaT")
+
+
+class TestDatetimeIndexFormat(tm.TestCase):
+    def test_datetime(self):
+        formatted = pd.to_datetime([datetime(2003, 1, 1, 12), pd.NaT]).format()
+        self.assertEqual(formatted[0], "2003-01-01 12:00:00")
+        self.assertEqual(formatted[1], "NaT")
+
+    def test_date(self):
+        formatted = pd.to_datetime([datetime(2003, 1, 1), pd.NaT]).format()
+        self.assertEqual(formatted[0], "2003-01-01")
+        self.assertEqual(formatted[1], "NaT")
+
+    def test_date_tz(self):
+        formatted = pd.to_datetime([datetime(2013,1,1)], utc=True).format()
+        self.assertEqual(formatted[0], "2013-01-01 00:00:00+00:00")
+
+        formatted = pd.to_datetime([datetime(2013,1,1), pd.NaT], utc=True).format()
+        self.assertEqual(formatted[0], "2013-01-01 00:00:00+00:00")
+
+    def test_date_explict_date_format(self):
+        formatted = pd.to_datetime([datetime(2003, 2, 1), pd.NaT]).format(date_format="%m-%d-%Y", na_rep="UT")
+        self.assertEqual(formatted[0], "02-01-2003")
+        self.assertEqual(formatted[1], "UT")
+
+
+class TestDatetimeIndexUnicode(tm.TestCase):
+    def test_dates(self):
+        text = str(pd.to_datetime([datetime(2013,1,1), datetime(2014,1,1)]))
+        self.assertTrue("[2013-01-01," in text)
+        self.assertTrue(", 2014-01-01]" in text)
+
+    def test_mixed(self):
+        text = str(pd.to_datetime([datetime(2013,1,1), datetime(2014,1,1,12), datetime(2014,1,1)]))
+        self.assertTrue("[2013-01-01 00:00:00," in text)
+        self.assertTrue(", 2014-01-01 00:00:00]" in text)
+
+
+class TestStringRepTimestamp(tm.TestCase):
+    def test_no_tz(self):
+        dt_date = datetime(2013, 1, 2)
+        self.assertEqual(str(dt_date), str(Timestamp(dt_date)))
+
+        dt_datetime = datetime(2013, 1, 2, 12, 1, 3)
+        self.assertEqual(str(dt_datetime), str(Timestamp(dt_datetime)))
+
+        dt_datetime_us = datetime(2013, 1, 2, 12, 1, 3, 45)
+        self.assertEqual(str(dt_datetime_us), str(Timestamp(dt_datetime_us)))
+
+        ts_nanos_only = Timestamp(200)
+        self.assertEqual(str(ts_nanos_only), "1970-01-01 00:00:00.000000200")
+
+        ts_nanos_micros = Timestamp(1200)
+        self.assertEqual(str(ts_nanos_micros), "1970-01-01 00:00:00.000001200")
+
+    def test_tz_pytz(self):
+        _skip_if_no_pytz()
+
+        import pytz
+
+        dt_date = datetime(2013, 1, 2, tzinfo=pytz.utc)
+        self.assertEqual(str(dt_date), str(Timestamp(dt_date)))
+
+        dt_datetime = datetime(2013, 1, 2, 12, 1, 3, tzinfo=pytz.utc)
+        self.assertEqual(str(dt_datetime), str(Timestamp(dt_datetime)))
+
+        dt_datetime_us = datetime(2013, 1, 2, 12, 1, 3, 45, tzinfo=pytz.utc)
+        self.assertEqual(str(dt_datetime_us), str(Timestamp(dt_datetime_us)))
+
+    def test_tz_dateutil(self):
+        _skip_if_no_dateutil()
+        import dateutil
+        utc = dateutil.tz.gettz('UTC')
+
+        dt_date = datetime(2013, 1, 2, tzinfo=utc)
+        self.assertEqual(str(dt_date), str(Timestamp(dt_date)))
+
+        dt_datetime = datetime(2013, 1, 2, 12, 1, 3, tzinfo=utc)
+        self.assertEqual(str(dt_datetime), str(Timestamp(dt_datetime)))
+
+        dt_datetime_us = datetime(2013, 1, 2, 12, 1, 3, 45, tzinfo=utc)
+        self.assertEqual(str(dt_datetime_us), str(Timestamp(dt_datetime_us)))
 
 if __name__ == '__main__':
     import nose

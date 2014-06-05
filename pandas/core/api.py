@@ -6,6 +6,7 @@ import numpy as np
 from pandas.core.algorithms import factorize, match, unique, value_counts
 from pandas.core.common import isnull, notnull
 from pandas.core.categorical import Categorical
+from pandas.core.groupby import Grouper
 from pandas.core.format import set_eng_float_format
 from pandas.core.index import Index, Int64Index, Float64Index, MultiIndex
 
@@ -19,6 +20,7 @@ from pandas.core.reshape import (pivot_simple as pivot, get_dummies,
 
 WidePanel = Panel
 
+from pandas.core.indexing import IndexSlice
 from pandas.tseries.offsets import DateOffset
 from pandas.tseries.tools import to_datetime
 from pandas.tseries.index import (DatetimeIndex, Timestamp,
@@ -26,9 +28,8 @@ from pandas.tseries.index import (DatetimeIndex, Timestamp,
 from pandas.tseries.period import Period, PeriodIndex
 
 # legacy
-from pandas.core.daterange import DateRange  # deprecated
 from pandas.core.common import save, load  # deprecated, remove in 0.13
 import pandas.core.datetools as datetools
 
 from pandas.core.config import (get_option, set_option, reset_option,
-                                describe_option, options)
+                                describe_option, option_context, options)

@@ -28,26 +28,48 @@ function edit_init()
 
 edit_init
 
-# Install Dependencies
-# as of pip 1.4rc2, wheel files are still being broken regularly, this is a
-# known good commit. should revert to pypi when a final release is out
-pip_commit=42102e9deaea99db08b681d06906c2945f6f95e2
-pip install -I git+https://github.com/pypa/pip@$pip_commit#egg=pip
-
 python_major_version="${TRAVIS_PYTHON_VERSION:0:1}"
 [ "$python_major_version" == "2" ] && python_major_version=""
 
+home_dir=$(pwd)
+echo "home_dir: [$home_dir]"
+
+# known working
+# pip==1.5.1
+# setuptools==2.2
+# wheel==0.22
+# nose==1.3.0 (1.3.1 broken for PY3)
+
+pip install -I -U pip
 pip install -I -U setuptools
-pip install wheel
+pip install wheel==0.22
+
+# install nose
+pip uninstall nose -y
+
+if [ -n "$EXPERIMENTAL" ]; then
+
+    # install from master
+    rm -Rf /tmp/nose
+    cd /tmp
+    git clone --branch master https://github.com/nose-devs/nose.git nose
+    cd nose
+    python setup.py install
+    cd $home_dir
+
+else
+
+    # known good version
+    pip install nose==1.3.0
+
+fi
+
 
 # comment this line to disable the fetching of wheel files
-base_url=http://cache27diy-cpycloud.rhcloud.com
+base_url=http://pandas.pydata.org/pandas-build/dev/wheels
+
 wheel_box=${TRAVIS_PYTHON_VERSION}${JOB_TAG}
-PIP_ARGS+=" -I --use-wheel --find-links=$base_url/$wheel_box/"
-
-# Force virtualenv to accpet system_site_packages
-rm -f $VIRTUAL_ENV/lib/python$TRAVIS_PYTHON_VERSION/no-global-site-packages.txt
-
+PIP_ARGS+=" -I --use-wheel --find-links=$base_url/$wheel_box/ --allow-external --allow-insecure"
 
 if [ -n "$LOCALE_OVERRIDE" ]; then
     # make sure the locale is available
@@ -55,11 +77,39 @@ if [ -n "$LOCALE_OVERRIDE" ]; then
     time sudo locale-gen "$LOCALE_OVERRIDE"
 fi
 
-time pip install $PIP_ARGS -r ci/requirements-${wheel_box}.txt
-
 # we need these for numpy
 time sudo apt-get $APT_ARGS install libatlas-base-dev gfortran
 
+if [ -n "$NUMPY_BUILD" ]; then
+    # building numpy
+
+    cd $home_dir
+    echo "cloning numpy"
+
+    rm -Rf /tmp/numpy
+    cd /tmp
+
+    # remove the system installed numpy
+    pip uninstall numpy -y
+
+    # install cython
+    pip install --find-links http://wheels.astropy.org/ --find-links http://wheels2.astropy.org/ --use-wheel Cython
+
+    # clone & install
+    git clone --branch $NUMPY_BUILD https://github.com/numpy/numpy.git numpy
+    cd numpy
+    time pip install .
+    pip uninstall cython -y
+
+    cd $home_dir
+    numpy_version=$(python -c 'import numpy; print(numpy.__version__)')
+    echo "[$home_dir] numpy current: $numpy_version"
+fi
+
+# Force virtualenv to accept system_site_packages
+rm -f $VIRTUAL_ENV/lib/python$TRAVIS_PYTHON_VERSION/no-global-site-packages.txt
+
+time pip install $PIP_ARGS -r ci/requirements-${wheel_box}.txt
 
 # Need to enable for locale testing. The location of the locale file(s) is
 # distro specific. For example, on Arch Linux all of the locales are in a
@@ -95,7 +145,26 @@ if [ -n "$FULL_DEPS" ]; then
 fi
 
 
-# build and install pandas
-time python setup.py build_ext install
+# set the compiler cache to work
+if [ "$IRON_TOKEN" ]; then
+    export PATH=/usr/lib/ccache:/usr/lib64/ccache:$PATH
+    gcc=$(which gcc)
+    echo "gcc: $gcc"
+    ccache=$(which ccache)
+    echo "ccache: $ccache"
+    export CC='ccache gcc'
+fi
+
+# build pandas
+time python setup.py sdist
+pip uninstall cython -y
+
+# install pandas
+time pip install $(find dist | grep gz | head -n 1)
+
+# restore cython (if not numpy building)
+if [ -z "$NUMPY_BUILD" ]; then
+    time pip install $PIP_ARGS  $(cat ci/requirements-${wheel_box}.txt | grep -i cython)
+fi
 
 true

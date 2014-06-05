@@ -9,12 +9,14 @@ import logging
 from datetime import datetime
 import pkg_resources
 from distutils.version import LooseVersion
+from pandas.compat import u
 
 import pandas as pd
 import numpy as np
 
-from pandas import DataFrame, concat
 from pandas.core.common import PandasError
+from pandas.core.frame import DataFrame
+from pandas.tools.merge import concat
 
 try:
     import bq
@@ -116,9 +118,8 @@ def _parse_entry(field_value, field_type):
         field_value = np.datetime64(timestamp)
     elif field_type == 'BOOLEAN':
         field_value = field_value == 'true'
-    # Note that results are unicode, so this will
-    # fail for non-ASCII characters.. this probably
-    # functions differently in Python 3
+    elif field_type == 'STRING':
+        field_value = field_value
     else:
         field_value = str(field_value)
     return field_value
@@ -203,9 +204,6 @@ def _parse_data(client, job, index_col=None, col_order=None):
     pagination API. We are using the most flexible iteration method
     that we could find in the bq.py/bigquery_client.py API's, but
     these have undergone large amounts of change recently.
-
-    We have encountered bugs with this functionality, see:
-    http://stackoverflow.com/questions/19145587/bq-py-not-paging-results
     """
 
     # dtype Map -
@@ -287,7 +285,7 @@ def _parse_data(client, job, index_col=None, col_order=None):
             kwds['startIndex'] = start_row
         data = client.apiclient.jobs().getQueryResults(**kwds).execute()
         if not data['jobComplete']:
-            raise BigqueryError('Job was not completed, or was invalid')
+            raise bigquery_client.BigqueryError('Job was not completed, or was invalid')
 
         # How many rows are there across all pages?
         # Note: This is presently the only reason we don't just use
@@ -349,6 +347,8 @@ def _parse_data(client, job, index_col=None, col_order=None):
 def to_gbq(dataframe, destination_table, schema=None, col_order=None,
            if_exists='fail', **kwargs):
     """Write a DataFrame to a Google BigQuery table.
+
+    THIS IS AN EXPERIMENTAL LIBRARY
 
     If the table exists, the DataFrame will be appended. If not, a new table
     will be created, in which case the schema will have to be specified. By
@@ -470,6 +470,8 @@ def to_gbq(dataframe, destination_table, schema=None, col_order=None,
 def read_gbq(query, project_id=None, destination_table=None, index_col=None,
              col_order=None, **kwargs):
     """Load data from Google BigQuery.
+
+    THIS IS AN EXPERIMENTAL LIBRARY
 
     The main method a user calls to load data from Google BigQuery into a
     pandas DataFrame. This is a simple wrapper for Google's bq.py and

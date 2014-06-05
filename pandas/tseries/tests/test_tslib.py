@@ -5,13 +5,50 @@ import numpy as np
 from pandas import tslib
 import datetime
 
-from pandas.core.api import Timestamp
+from pandas.core.api import Timestamp, Series
 from pandas.tslib import period_asfreq, period_ordinal
+from pandas.tseries.index import date_range
 from pandas.tseries.frequencies import get_freq
 from pandas import _np_version_under1p7
 import pandas.util.testing as tm
+from pandas.util.testing import assert_series_equal
 
 class TestTimestamp(tm.TestCase):
+    def test_repr(self):
+        date = '2014-03-07'
+        tz = 'US/Eastern'
+        freq = 'M'
+
+        date_only = Timestamp(date)
+        self.assertIn(date, repr(date_only))
+        self.assertNotIn(tz, repr(date_only))
+        self.assertNotIn(freq, repr(date_only))
+        self.assertEqual(date_only, eval(repr(date_only)))
+
+        date_tz = Timestamp(date, tz=tz)
+        self.assertIn(date, repr(date_tz))
+        self.assertIn(tz, repr(date_tz))
+        self.assertNotIn(freq, repr(date_tz))
+        self.assertEqual(date_tz, eval(repr(date_tz)))
+
+        date_freq = Timestamp(date, offset=freq)
+        self.assertIn(date, repr(date_freq))
+        self.assertNotIn(tz, repr(date_freq))
+        self.assertIn(freq, repr(date_freq))
+        self.assertEqual(date_freq, eval(repr(date_freq)))
+
+        date_tz_freq = Timestamp(date, tz=tz, offset=freq)
+        self.assertIn(date, repr(date_tz_freq))
+        self.assertIn(tz, repr(date_tz_freq))
+        self.assertIn(freq, repr(date_tz_freq))
+        self.assertEqual(date_tz_freq, eval(repr(date_tz_freq)))
+
+        # this can cause the tz field to be populated, but it's redundant to information in the datestring
+        date_with_utc_offset = Timestamp('2014-03-13 00:00:00-0400', tz=None)
+        self.assertIn('2014-03-13 00:00:00-0400', repr(date_with_utc_offset))
+        self.assertNotIn('tzoffset', repr(date_with_utc_offset))
+        self.assertEqual(date_with_utc_offset, eval(repr(date_with_utc_offset)))
+
     def test_bounds_with_different_units(self):
         out_of_bounds_dates = (
             '1677-09-21',
@@ -90,30 +127,26 @@ class TestDatetimeParsingWrappers(tm.TestCase):
 class TestArrayToDatetime(tm.TestCase):
     def test_parsing_valid_dates(self):
         arr = np.array(['01-01-2013', '01-02-2013'], dtype=object)
-        self.assert_(
-            np.array_equal(
-                tslib.array_to_datetime(arr),
-                np.array(
+        self.assert_numpy_array_equal(
+            tslib.array_to_datetime(arr),
+            np.array(
                     [
                         '2013-01-01T00:00:00.000000000-0000',
                         '2013-01-02T00:00:00.000000000-0000'
                     ],
                     dtype='M8[ns]'
-                )
             )
         )
 
         arr = np.array(['Mon Sep 16 2013', 'Tue Sep 17 2013'], dtype=object)
-        self.assert_(
-            np.array_equal(
-                tslib.array_to_datetime(arr),
-                np.array(
+        self.assert_numpy_array_equal(
+            tslib.array_to_datetime(arr),
+            np.array(
                     [
                         '2013-09-16T00:00:00.000000000-0000',
                         '2013-09-17T00:00:00.000000000-0000'
                     ],
                     dtype='M8[ns]'
-                )
             )
         )
 
@@ -122,10 +155,10 @@ class TestArrayToDatetime(tm.TestCase):
         # These strings don't look like datetimes so they shouldn't be
         # attempted to be converted
         arr = np.array(['-352.737091', '183.575577'], dtype=object)
-        self.assert_(np.array_equal(tslib.array_to_datetime(arr), arr))
+        self.assert_numpy_array_equal(tslib.array_to_datetime(arr), arr)
 
         arr = np.array(['1', '2', '3', '4', '5'], dtype=object)
-        self.assert_(np.array_equal(tslib.array_to_datetime(arr), arr))
+        self.assert_numpy_array_equal(tslib.array_to_datetime(arr), arr)
 
     def test_coercing_dates_outside_of_datetime64_ns_bounds(self):
         invalid_dates = [
@@ -144,7 +177,7 @@ class TestArrayToDatetime(tm.TestCase):
                 coerce=False,
                 raise_=True,
             )
-            self.assert_(
+            self.assertTrue(
                 np.array_equal(
                     tslib.array_to_datetime(
                         np.array([invalid_date], dtype='object'), coerce=True
@@ -154,16 +187,14 @@ class TestArrayToDatetime(tm.TestCase):
             )
 
         arr = np.array(['1/1/1000', '1/1/2000'], dtype=object)
-        self.assert_(
-            np.array_equal(
-                tslib.array_to_datetime(arr, coerce=True),
-                np.array(
+        self.assert_numpy_array_equal(
+            tslib.array_to_datetime(arr, coerce=True),
+            np.array(
                     [
                         tslib.iNaT,
                         '2000-01-01T00:00:00.000000000-0000'
                     ],
                     dtype='M8[ns]'
-                )
             )
         )
 
@@ -172,23 +203,42 @@ class TestArrayToDatetime(tm.TestCase):
 
         # Without coercing, the presence of any invalid dates prevents
         # any values from being converted
-        self.assert_(np.array_equal(tslib.array_to_datetime(arr), arr))
+        self.assert_numpy_array_equal(tslib.array_to_datetime(arr), arr)
 
         # With coercing, the invalid dates becomes iNaT
-        self.assert_(
-            np.array_equal(
-                tslib.array_to_datetime(arr, coerce=True),
-                np.array(
+        self.assert_numpy_array_equal(
+            tslib.array_to_datetime(arr, coerce=True),
+            np.array(
                     [
                         '2013-01-01T00:00:00.000000000-0000',
                         tslib.iNaT,
                         tslib.iNaT
                     ],
                     dtype='M8[ns]'
-                )
             )
         )
 
+    def test_parsing_timezone_offsets(self):
+        # All of these datetime strings with offsets are equivalent
+        # to the same datetime after the timezone offset is added
+        dt_strings = [
+            '01-01-2013 08:00:00+08:00',
+            '2013-01-01T08:00:00.000000000+0800',
+            '2012-12-31T16:00:00.000000000-0800',
+            '12-31-2012 23:00:00-01:00',
+        ]
+
+        expected_output = tslib.array_to_datetime(
+            np.array(['01-01-2013 00:00:00'], dtype=object)
+        )
+
+        for dt_string in dt_strings:
+            self.assert_numpy_array_equal(
+                tslib.array_to_datetime(
+                    np.array([dt_string], dtype=object)
+                ),
+                expected_output
+            )
 
 class TestTimestampNsOperations(tm.TestCase):
     def setUp(self):
@@ -200,7 +250,7 @@ class TestTimestampNsOperations(tm.TestCase):
         value = self.timestamp.value
         modified_value = modified_timestamp.value
 
-        self.assertEquals(modified_value - value, expected_value)
+        self.assertEqual(modified_value - value, expected_value)
 
     def test_timedelta_ns_arithmetic(self):
         self.assert_ns_timedelta(self.timestamp + np.timedelta64(-123, 'ns'), -123)
@@ -218,6 +268,47 @@ class TestTimestampNsOperations(tm.TestCase):
     def test_nanosecond_string_parsing(self):
         self.timestamp = Timestamp('2013-05-01 07:15:45.123456789')
         self.assertEqual(self.timestamp.value, 1367392545123456000)
+
+    def test_nat_arithmetic(self):
+        # GH 6873
+        nat = tslib.NaT
+        t = Timestamp('2014-01-01')
+        dt = datetime.datetime(2014, 1, 1)
+        delta = datetime.timedelta(3600)
+
+        # Timestamp / datetime
+        for (left, right) in [(nat, nat), (nat, t), (dt, nat)]:
+            # NaT + Timestamp-like should raise TypeError
+            with tm.assertRaises(TypeError):
+                left + right
+            with tm.assertRaises(TypeError):
+                right + left
+
+            # NaT - Timestamp-like (or inverse) returns NaT
+            self.assertTrue((left - right) is tslib.NaT)
+            self.assertTrue((right - left) is tslib.NaT)
+
+        # timedelta-like
+        # offsets are tested in test_offsets.py
+        for (left, right) in [(nat, delta)]:
+            # NaT + timedelta-like returns NaT
+            self.assertTrue((left + right) is tslib.NaT)
+            # timedelta-like + NaT should raise TypeError
+            with tm.assertRaises(TypeError):
+                right + left
+
+            self.assertTrue((left - right) is tslib.NaT)
+            with tm.assertRaises(TypeError):
+                right - left
+
+        if _np_version_under1p7:
+            self.assertEqual(nat + np.timedelta64(1, 'h'), tslib.NaT)
+            with tm.assertRaises(TypeError):
+                np.timedelta64(1, 'h') + nat
+
+            self.assertEqual(nat - np.timedelta64(1, 'h'), tslib.NaT)
+            with tm.assertRaises(TypeError):
+                np.timedelta64(1, 'h') - nat
 
 
 class TestTslib(tm.TestCase):
@@ -279,10 +370,55 @@ class TestTslib(tm.TestCase):
         # Tuesday
         self.assertEqual(11418, period_ordinal(2013, 10, 8, 0, 0, 0, 0, 0, get_freq('B')))
 
-class TestTomeStampOps(tm.TestCase):
+class TestTimestampOps(tm.TestCase):
     def test_timestamp_and_datetime(self):
-        self.assertEqual((Timestamp(datetime.datetime(2013, 10,13)) - datetime.datetime(2013, 10,12)).days, 1)
-        self.assertEqual((datetime.datetime(2013, 10, 12) - Timestamp(datetime.datetime(2013, 10,13))).days, -1)
+        self.assertEqual((Timestamp(datetime.datetime(2013, 10, 13)) - datetime.datetime(2013, 10, 12)).days, 1)
+        self.assertEqual((datetime.datetime(2013, 10, 12) - Timestamp(datetime.datetime(2013, 10, 13))).days, -1)
+
+    def test_timestamp_and_series(self):
+        timestamp_series = Series(date_range('2014-03-17', periods=2, freq='D', tz='US/Eastern'))
+        first_timestamp = timestamp_series[0]
+
+        if not _np_version_under1p7:
+            delta_series = Series([np.timedelta64(0, 'D'), np.timedelta64(1, 'D')])
+            assert_series_equal(timestamp_series - first_timestamp, delta_series)
+            assert_series_equal(first_timestamp - timestamp_series, -delta_series)
+
+    def test_addition_subtraction_types(self):
+        # Assert on the types resulting from Timestamp +/- various date/time objects
+        datetime_instance = datetime.datetime(2014, 3, 4)
+        timedelta_instance = datetime.timedelta(seconds=1)
+        # build a timestamp with a frequency, since then it supports addition/subtraction of integers
+        timestamp_instance = date_range(datetime_instance, periods=1, freq='D')[0]
+
+        self.assertEqual(type(timestamp_instance + 1), Timestamp)
+        self.assertEqual(type(timestamp_instance - 1), Timestamp)
+
+        # Timestamp + datetime not supported, though subtraction is supported and yields timedelta
+        self.assertEqual(type(timestamp_instance - datetime_instance), datetime.timedelta)
+
+        self.assertEqual(type(timestamp_instance + timedelta_instance), Timestamp)
+        self.assertEqual(type(timestamp_instance - timedelta_instance), Timestamp)
+
+        if not _np_version_under1p7:
+            # Timestamp +/- datetime64 not supported, so not tested (could possibly assert error raised?)
+            timedelta64_instance = np.timedelta64(1, 'D')
+            self.assertEqual(type(timestamp_instance + timedelta64_instance), Timestamp)
+            self.assertEqual(type(timestamp_instance - timedelta64_instance), Timestamp)
+
+    def test_addition_subtraction_preserve_frequency(self):
+        timestamp_instance = date_range('2014-03-05', periods=1, freq='D')[0]
+        timedelta_instance = datetime.timedelta(days=1)
+        original_freq = timestamp_instance.freq
+        self.assertEqual((timestamp_instance + 1).freq, original_freq)
+        self.assertEqual((timestamp_instance - 1).freq, original_freq)
+        self.assertEqual((timestamp_instance + timedelta_instance).freq, original_freq)
+        self.assertEqual((timestamp_instance - timedelta_instance).freq, original_freq)
+
+        if not _np_version_under1p7:
+            timedelta64_instance = np.timedelta64(1, 'D')
+            self.assertEqual((timestamp_instance + timedelta64_instance).freq, original_freq)
+            self.assertEqual((timestamp_instance - timedelta64_instance).freq, original_freq)
 
 if __name__ == '__main__':
     nose.runmodule(argv=[__file__, '-vvs', '-x', '--pdb', '--pdb-failure'],

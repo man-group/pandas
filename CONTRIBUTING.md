@@ -18,8 +18,19 @@ looking for a quick way to help out.
 
         ```
 
-  - Specify the pandas version used and those of it's dependencies. You can simply include   the output of
-    [`ci/print_versions.py`](https://github.com/pydata/pandas/blob/master/ci/print_versions.py).
+  - Include the full version string of pandas and it's dependencies. In recent (>0.12) versions
+    of pandas you can use a built in function:
+
+    ```python
+    >>> from pandas.util.print_versions import show_versions
+    >>> show_versions()
+    ```
+
+    and in 0.13.1 onwards:
+    ```python
+    >>> pd.show_versions()
+    ```
+
   - Explain what the expected behavior was, and what you saw instead.
 
 #### Pull Requests
@@ -30,10 +41,10 @@ looking for a quick way to help out.
     - One blank line.
     - Optionally, a commit message body.
   - Please reference relevant Github issues in your commit message using `GH1234`
-    or `#1234`. Either style is fine but the '#' style generates nose when your rebase your PR.
-  - `doc/source/release.rst` and `doc/source/vx.y.z.txt` contain an ongoing
-    changelog for each release. Add entries to these files
-    as needed in a separate commit in your PR: document the fix, enhancement,
+    or `#1234`. Either style is fine but the '#' style generates noise when your rebase your PR.
+  - `doc/source/vx.y.z.txt` contains an ongoing
+    changelog for each release. Add an entry to this file
+    as needed in your PR: document the fix, enhancement,
     or (unavoidable) breaking change.
   - Keep style fixes to a separate commit to make your PR more readable.
   - An informal commit message format is in effect for the project. Please try
@@ -52,8 +63,10 @@ looking for a quick way to help out.
     - Add deprecation warnings where needed.
   - Performance matters. Make sure your PR hasn't introduced perf regressions by using `test_perf.sh`.
   - Docstrings follow the [numpydoc](https://github.com/numpy/numpy/blob/master/doc/HOWTO_DOCUMENT.rst.txt) format.
+  - Write tests.
   - When writing tests, use 2.6 compatible `self.assertFoo` methods. Some polyfills such as `assertRaises`
     can be found in `pandas.util.testing`.
+  - Do not attach doctrings to tests. Make the test itself readable and use comments if needed.
   - Generally, pandas source files should not contain attributions. You can include a "thanks to..."
     in the release changelog. The rest is `git blame`/`git log`.
   - When you start working on a PR, start by creating a new branch pointing at the latest
@@ -65,6 +78,10 @@ looking for a quick way to help out.
   - Use `raise AssertionError` over `assert` unless you want the assertion stripped by `python -o`.
   - The pandas copyright policy is detailed in the pandas [LICENSE](https://github.com/pydata/pandas/blob/master/LICENSE).
   - On the subject of [PEP8](http://www.python.org/dev/peps/pep-0008/): yes.
+  - We've written a tool to check that your commits are PEP8 great,
+    [`pip install pep8radius`](https://github.com/hayd/pep8radius). Look at PEP8 fixes in your branch
+    vs master with `pep8radius master --diff` and make these changes with
+    `pep8radius master --diff --in-place`.
   - On the subject of a massive PEP8-storm touching everything: not too often (once per release works).
 
 ### Notes on plotting function conventions

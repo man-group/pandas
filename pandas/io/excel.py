@@ -16,8 +16,10 @@ from pandas.compat import map, zip, reduce, range, lrange, u, add_metaclass
 from pandas.core import config
 from pandas.core.common import pprint_thing
 import pandas.compat as compat
+import pandas.compat.openpyxl_compat as openpyxl_compat
 import pandas.core.common as com
 from warnings import warn
+from distutils.version import LooseVersion
 
 __all__ = ["read_excel", "ExcelWriter", "ExcelFile"]
 
@@ -49,17 +51,17 @@ def get_writer(engine_name):
         raise ValueError("No Excel writer '%s'" % engine_name)
 
 
-def read_excel(io, sheetname, **kwds):
+def read_excel(io, sheetname=0, **kwds):
     """Read an Excel table into a pandas DataFrame
 
     Parameters
     ----------
     io : string, file-like object or xlrd workbook
         If a string, expected to be a path to xls or xlsx file
-    sheetname : string
-         Name of Excel sheet
+    sheetname : string or int, default 0
+        Name of Excel sheet or the page number of the sheet
     header : int, default 0
-         Row to use for the column labels of the parsed DataFrame
+        Row to use for the column labels of the parsed DataFrame
     skiprows : list-like
         Rows to skip at the beginning (0-indexed)
     skip_footer : int, default 0
@@ -86,7 +88,11 @@ def read_excel(io, sheetname, **kwds):
     convert_float : boolean, default True
         convert integral floats to int (i.e., 1.0 --> 1). If False, all numeric
         data will be read in as floats: Excel stores all numbers as floats
-        internally.
+        internally
+    has_index_names : boolean, default False
+        True if the cols defined in index_col have an index name and are
+        not in the header. Index name will be placed on a separate line below
+        the header.
 
     Returns
     -------
@@ -143,7 +149,7 @@ class ExcelFile(object):
             raise ValueError('Must explicitly set engine if not passing in'
                              ' buffer or path for io.')
 
-    def parse(self, sheetname, header=0, skiprows=None, skip_footer=0,
+    def parse(self, sheetname=0, header=0, skiprows=None, skip_footer=0,
               index_col=None, parse_cols=None, parse_dates=False,
               date_parser=None, na_values=None, thousands=None, chunksize=None,
               convert_float=True, has_index_names=False, **kwds):
@@ -196,7 +202,8 @@ class ExcelFile(object):
         if skipfooter is not None:
             skip_footer = skipfooter
 
-        return self._parse_excel(sheetname, header=header, skiprows=skiprows,
+        return self._parse_excel(sheetname=sheetname, header=header,
+                                 skiprows=skiprows,
                                  index_col=index_col,
                                  has_index_names=has_index_names,
                                  parse_cols=parse_cols,
@@ -240,16 +247,24 @@ class ExcelFile(object):
         else:
             return i in parse_cols
 
-    def _parse_excel(self, sheetname, header=0, skiprows=None, skip_footer=0,
+    def _parse_excel(self, sheetname=0, header=0, skiprows=None, skip_footer=0,
                      index_col=None, has_index_names=None, parse_cols=None,
                      parse_dates=False, date_parser=None, na_values=None,
                      thousands=None, chunksize=None, convert_float=True,
                      **kwds):
-        from xlrd import (xldate_as_tuple, XL_CELL_DATE,
+        import xlrd
+        from xlrd import (xldate, XL_CELL_DATE,
                           XL_CELL_ERROR, XL_CELL_BOOLEAN,
                           XL_CELL_NUMBER)
 
-        datemode = self.book.datemode
+        epoch1904 = self.book.datemode
+
+        # xlrd >= 0.9.3 can return datetime objects directly.
+        if LooseVersion(xlrd.__VERSION__) >= LooseVersion("0.9.3"):
+            xlrd_0_9_3 = True
+        else:
+            xlrd_0_9_3 = False
+
         if isinstance(sheetname, compat.string_types):
             sheet = self.book.sheet_by_name(sheetname)
         else:  # assume an integer if not a string
@@ -266,12 +281,29 @@ class ExcelFile(object):
 
                 if parse_cols is None or should_parse[j]:
                     if typ == XL_CELL_DATE:
-                        dt = xldate_as_tuple(value, datemode)
-                        # how to produce this first case?
-                        if dt[0] < datetime.MINYEAR:  # pragma: no cover
-                            value = datetime.time(*dt[3:])
+                        if xlrd_0_9_3:
+                            # Use the newer xlrd datetime handling.
+                            value = xldate.xldate_as_datetime(value, epoch1904)
+
+                            # Excel doesn't distinguish between dates and time,
+                            # so we treat dates on the epoch as times only.
+                            # Also, Excel supports 1900 and 1904 epochs.
+                            year = (value.timetuple())[0:3]
+                            if ((not epoch1904 and year == (1899, 12, 31))
+                                    or (epoch1904 and year == (1904, 1, 1))):
+                                    value = datetime.time(value.hour,
+                                                          value.minute,
+                                                          value.second,
+                                                          value.microsecond)
                         else:
-                            value = datetime.datetime(*dt)
+                            # Use the xlrd <= 0.9.2 date handling.
+                            dt = xldate.xldate_as_tuple(value, epoch1904)
+
+                            if dt[0] < datetime.MINYEAR:
+                                value = datetime.time(*dt[3:])
+                            else:
+                                value = datetime.datetime(*dt)
+
                     elif typ == XL_CELL_ERROR:
                         value = np.nan
                     elif typ == XL_CELL_BOOLEAN:
@@ -355,6 +387,11 @@ class ExcelWriter(object):
         Engine to use for writing. If None, defaults to
         ``io.excel.<extension>.writer``.  NOTE: can only be passed as a keyword
         argument.
+    date_format : string, default None
+        Format string for dates written into Excel files (e.g. 'YYYY-MM-DD')
+    datetime_format : string, default None
+        Format string for datetime objects written into Excel files
+        (e.g. 'YYYY-MM-DD HH:MM:SS')
     """
     # Defining an ExcelWriter implementation (see abstract methods for more...)
 
@@ -429,14 +466,24 @@ class ExcelWriter(object):
         """
         pass
 
-    def __init__(self, path, engine=None, **engine_kwargs):
-        # validate that this engine can handle the extnesion
+    def __init__(self, path, engine=None,
+                 date_format=None, datetime_format=None, **engine_kwargs):
+        # validate that this engine can handle the extension
         ext = os.path.splitext(path)[-1]
         self.check_extension(ext)
 
         self.path = path
         self.sheets = {}
         self.cur_sheet = None
+
+        if date_format is None:
+            self.date_format = 'YYYY-MM-DD'
+        else:
+            self.date_format = date_format
+        if datetime_format is None:
+            self.datetime_format = 'YYYY-MM-DD HH:MM:SS'
+        else:
+            self.datetime_format = datetime_format
 
     def _get_sheet_name(self, sheet_name):
         if sheet_name is None:
@@ -476,6 +523,11 @@ class _OpenpyxlWriter(ExcelWriter):
     supported_extensions = ('.xlsx', '.xlsm')
 
     def __init__(self, path, engine=None, **engine_kwargs):
+        if not openpyxl_compat.is_compat():
+            raise ValueError('Installed openpyxl is not supported at this '
+                             'time. Use >={0} and '
+                             '<{1}.'.format(openpyxl_compat.start_ver,
+                                            openpyxl_compat.stop_ver))
         # Use the openpyxl module as the Excel writer.
         from openpyxl.workbook import Workbook
 
@@ -518,9 +570,9 @@ class _OpenpyxlWriter(ExcelWriter):
                                             style.__getattribute__(field))
 
             if isinstance(cell.val, datetime.datetime):
-                xcell.style.number_format.format_code = "YYYY-MM-DD HH:MM:SS"
+                xcell.style.number_format.format_code = self.datetime_format
             elif isinstance(cell.val, datetime.date):
-                xcell.style.number_format.format_code = "YYYY-MM-DD"
+                xcell.style.number_format.format_code = self.date_format
 
             if cell.mergestart is not None and cell.mergeend is not None:
                 cletterstart = get_column_letter(startcol + cell.col + 1)
@@ -578,15 +630,17 @@ class _XlwtWriter(ExcelWriter):
     engine = 'xlwt'
     supported_extensions = ('.xls',)
 
-    def __init__(self, path, engine=None, **engine_kwargs):
+    def __init__(self, path, engine=None, encoding=None, **engine_kwargs):
         # Use the xlwt module as the Excel writer.
         import xlwt
 
         super(_XlwtWriter, self).__init__(path, **engine_kwargs)
 
-        self.book = xlwt.Workbook()
-        self.fm_datetime = xlwt.easyxf(num_format_str='YYYY-MM-DD HH:MM:SS')
-        self.fm_date = xlwt.easyxf(num_format_str='YYYY-MM-DD')
+        if encoding is None:
+            encoding = 'ascii'
+        self.book = xlwt.Workbook(encoding=encoding)
+        self.fm_datetime = xlwt.easyxf(num_format_str=self.datetime_format)
+        self.fm_date = xlwt.easyxf(num_format_str=self.date_format)
 
     def save(self):
         """
@@ -612,9 +666,9 @@ class _XlwtWriter(ExcelWriter):
 
             num_format_str = None
             if isinstance(cell.val, datetime.datetime):
-                num_format_str = "YYYY-MM-DD HH:MM:SS"
-            if isinstance(cell.val, datetime.date):
-                num_format_str = "YYYY-MM-DD"
+                num_format_str = self.datetime_format
+            elif isinstance(cell.val, datetime.date):
+                num_format_str = self.date_format
 
             stylekey = json.dumps(cell.style)
             if num_format_str:
@@ -699,11 +753,15 @@ class _XlsxWriter(ExcelWriter):
     engine = 'xlsxwriter'
     supported_extensions = ('.xlsx',)
 
-    def __init__(self, path, engine=None, **engine_kwargs):
+    def __init__(self, path, engine=None,
+                 date_format=None, datetime_format=None, **engine_kwargs):
         # Use the xlsxwriter module as the Excel writer.
         import xlsxwriter
 
-        super(_XlsxWriter, self).__init__(path, engine=engine, **engine_kwargs)
+        super(_XlsxWriter, self).__init__(path, engine=engine,
+                                          date_format=date_format,
+                                          datetime_format=datetime_format,
+                                          **engine_kwargs)
 
         self.book = xlsxwriter.Workbook(path, **engine_kwargs)
 
@@ -729,9 +787,9 @@ class _XlsxWriter(ExcelWriter):
         for cell in cells:
             num_format_str = None
             if isinstance(cell.val, datetime.datetime):
-                num_format_str = "YYYY-MM-DD HH:MM:SS"
-            if isinstance(cell.val, datetime.date):
-                num_format_str = "YYYY-MM-DD"
+                num_format_str = self.datetime_format
+            elif isinstance(cell.val, datetime.date):
+                num_format_str = self.date_format
 
             stylekey = json.dumps(cell.style)
             if num_format_str:
@@ -762,11 +820,15 @@ class _XlsxWriter(ExcelWriter):
         style_dict: style dictionary to convert
         num_format_str: optional number format string
         """
-        if style_dict is None:
-            return None
 
         # Create a XlsxWriter format object.
         xl_format = self.book.add_format()
+
+        if num_format_str is not None:
+            xl_format.set_num_format(num_format_str)
+
+        if style_dict is None:
+            return xl_format
 
         # Map the cell font to XlsxWriter font properties.
         if style_dict.get('font'):
@@ -787,9 +849,6 @@ class _XlsxWriter(ExcelWriter):
         # Map the cell borders to XlsxWriter border properties.
         if style_dict.get('borders'):
             xl_format.set_border()
-
-        if num_format_str is not None:
-            xl_format.set_num_format(num_format_str)
 
         return xl_format
 

@@ -10,6 +10,7 @@ import os
 import sys
 import shutil
 import warnings
+import re
 
 # may need to work around setuptools bug by providing a fake Pyrex
 try:
@@ -163,7 +164,7 @@ the ideal tool for all of these tasks.
 
 Note
 ----
-Windows binaries built against NumPy 1.7.1
+Windows binaries built against NumPy 1.8.1
 """
 
 DISTNAME = 'pandas'
@@ -184,39 +185,59 @@ CLASSIFIERS = [
     'Programming Language :: Python :: 2.7',
     'Programming Language :: Python :: 3.2',
     'Programming Language :: Python :: 3.3',
+    'Programming Language :: Python :: 3.4',
     'Programming Language :: Cython',
     'Topic :: Scientific/Engineering',
 ]
 
 MAJOR = 0
-MINOR = 13
+MINOR = 14
 MICRO = 0
-ISRELEASED = True
+ISRELEASED = False
 VERSION = '%d.%d.%d' % (MAJOR, MINOR, MICRO)
 QUALIFIER = '_ahl1'
 
 FULLVERSION = VERSION
+write_version = True
+
 if not ISRELEASED:
+    import subprocess
     FULLVERSION += '.dev'
-    try:
-        import subprocess
+
+    pipe = None
+    for cmd in ['git','git.cmd']:
         try:
-            pipe = subprocess.Popen(["git", "describe", "--always"],
-                                    stdout=subprocess.PIPE).stdout
-        except OSError:
-            # msysgit compatibility
-            pipe = subprocess.Popen(
-                ["git.cmd", "describe", "--always"],
-                stdout=subprocess.PIPE).stdout
-        rev = pipe.read().strip()
-        # makes distutils blow up on Python 2.7
-        if sys.version_info[0] >= 3:
-            rev = rev.decode('ascii')
+            pipe = subprocess.Popen([cmd, "describe", "--always", "--match", "v[0-9]*"],
+                                stdout=subprocess.PIPE)
+            (so,serr) = pipe.communicate()
+            if pipe.returncode == 0:
+                break
+        except:
+            pass
 
-        FULLVERSION = rev.lstrip('v')
+    if pipe is None or pipe.returncode != 0:
+        # no git, or not in git dir
+        if os.path.exists('pandas/version.py'):
+            warnings.warn("WARNING: Couldn't get git revision, using existing pandas/version.py")
+            write_version = False
+        else:
+            warnings.warn("WARNING: Couldn't get git revision, using generic version string")
+    else:
+      # have git, in git dir, but may have used a shallow clone (travis does this)
+      rev = so.strip()
+      # makes distutils blow up on Python 2.7
+      if sys.version_info[0] >= 3:
+          rev = rev.decode('ascii')
 
-    except:
-        warnings.warn("WARNING: Couldn't get git revision")
+      if not rev.startswith('v') and re.match("[a-zA-Z0-9]{7,9}",rev):
+          # partial clone, manually construct version string
+          # this is the format before we started using git-describe
+          # to get an ordering on dev version strings.
+          rev ="v%s.dev-%s" % (VERSION, rev)
+
+      # Strip leading v from tags format "vx.y.z" to get th version string
+      FULLVERSION = rev.lstrip('v')
+
 else:
     FULLVERSION += QUALIFIER
 
@@ -236,6 +257,8 @@ short_version = '%s'
     finally:
         a.close()
 
+if write_version:
+    write_version_py()
 
 class CleanCommand(Command):
     """Custom distutils command to clean the .so and .pyc files."""
@@ -258,7 +281,7 @@ class CleanCommand(Command):
                                'ultrajsondec.c',
                                ]
 
-        for root, dirs, files in list(os.walk('pandas')):
+        for root, dirs, files in os.walk('pandas'):
             for f in files:
                 if f in self._clean_exclude:
                     continue
@@ -275,7 +298,7 @@ class CleanCommand(Command):
                 if d == '__pycache__':
                     self._clean_trees.append(pjoin(root, d))
 
-        for d in ('build',):
+        for d in ('build', 'dist'):
             if os.path.exists(d):
                 self._clean_trees.append(d)
 
@@ -482,7 +505,8 @@ else:
 
 msgpack_ext = Extension('pandas.msgpack',
                         sources = [srcpath('msgpack',
-                                           suffix=suffix, subdir='')],
+                                   suffix=suffix if suffix == '.pyx' else '.cpp',
+                                   subdir='')],
                         language='c++',
                         include_dirs=common_include,
                         define_macros=macros)
@@ -495,7 +519,7 @@ extensions.append(msgpack_ext)
 if suffix == '.pyx' and 'setuptools' in sys.modules:
     # undo dumb setuptools bug clobbering .pyx sources back to .c
     for ext in extensions:
-        if ext.sources[0].endswith('.c'):
+        if ext.sources[0].endswith(('.c','.cpp')):
             root, _ = os.path.splitext(ext.sources[0])
             ext.sources[0] = root + suffix
 
@@ -520,8 +544,6 @@ extensions.append(ujson_ext)
 
 if _have_setuptools:
     setuptools_kwargs["test_suite"] = "nose.collector"
-
-write_version_py()
 
 # The build cache system does string matching below this point.
 # if you change something, be careful.
@@ -561,6 +583,7 @@ setup(name=DISTNAME,
                                   'tests/data/*.txt',
                                   'tests/data/*.xls',
                                   'tests/data/*.xlsx',
+                                  'tests/data/*.xlsm',
                                   'tests/data/*.table',
                                   'tests/data/*.html',
                                   'tests/test_json/data/*.json'],

@@ -4,12 +4,11 @@ import re
 import nose
 from nose.tools import assert_equal
 import numpy as np
-from pandas.tslib import iNaT
-
-from pandas import Series, DataFrame, date_range, DatetimeIndex, Timestamp
+from pandas.tslib import iNaT, NaT
+from pandas import Series, DataFrame, date_range, DatetimeIndex, Timestamp, Float64Index
 from pandas import compat
 from pandas.compat import range, long, lrange, lmap, u
-from pandas.core.common import notnull, isnull
+from pandas.core.common import notnull, isnull, array_equivalent
 import pandas.core.common as com
 import pandas.util.testing as tm
 import pandas.core.config as cf
@@ -113,6 +112,14 @@ def test_isnull_lists():
     result = isnull([u('foo'), u('bar')])
     assert(not result.any())
 
+def test_isnull_nat():
+    result = isnull([NaT])
+    exp = np.array([True])
+    assert(np.array_equal(result, exp))
+
+    result = isnull(np.array([NaT], dtype=object))
+    exp = np.array([True])
+    assert(np.array_equal(result, exp))
 
 def test_isnull_datetime():
     assert (not isnull(datetime.now()))
@@ -127,6 +134,18 @@ def test_isnull_datetime():
     mask = isnull(idx)
     assert(mask[0])
     assert(not mask[1:].any())
+
+
+class TestIsNull(tm.TestCase):
+    def test_0d_array(self):
+        self.assertTrue(isnull(np.array(np.nan)))
+        self.assertFalse(isnull(np.array(0.0)))
+        self.assertFalse(isnull(np.array(0)))
+        # test object dtype
+        self.assertTrue(isnull(np.array(np.nan, dtype=object)))
+        self.assertFalse(isnull(np.array(0.0, dtype=object)))
+        self.assertFalse(isnull(np.array(0, dtype=object)))
+
 
 def test_downcast_conv():
     # test downcasting
@@ -159,6 +178,32 @@ def test_downcast_conv():
         result = com._possibly_downcast_to_dtype(arr,'infer')
         tm.assert_almost_equal(result, expected)
 
+    # empties
+    for dtype in [np.int32,np.float64,np.float32,np.bool_,np.int64,object]:
+        arr = np.array([],dtype=dtype)
+        result = com._possibly_downcast_to_dtype(arr,'int64')
+        tm.assert_almost_equal(result, np.array([],dtype=np.int64))
+        assert result.dtype == np.int64
+
+def test_array_equivalent():
+    assert array_equivalent(np.array([np.nan, np.nan]),
+                            np.array([np.nan, np.nan]))
+    assert array_equivalent(np.array([np.nan, 1, np.nan]),
+                            np.array([np.nan, 1, np.nan]))
+    assert array_equivalent(np.array([np.nan, None], dtype='object'),
+                            np.array([np.nan, None], dtype='object'))
+    assert array_equivalent(np.array([np.nan, 1+1j], dtype='complex'),
+                            np.array([np.nan, 1+1j], dtype='complex'))
+    assert not array_equivalent(np.array([np.nan, 1+1j], dtype='complex'),
+                                np.array([np.nan, 1+2j], dtype='complex'))
+    assert not array_equivalent(np.array([np.nan, 1, np.nan]),
+                                np.array([np.nan, 2, np.nan]))
+    assert not array_equivalent(np.array(['a', 'b', 'c', 'd']), np.array(['e', 'e']))
+    assert array_equivalent(Float64Index([0, np.nan]), Float64Index([0, np.nan]))
+    assert not array_equivalent(Float64Index([0, np.nan]), Float64Index([1, np.nan]))
+    assert array_equivalent(DatetimeIndex([0, np.nan]), DatetimeIndex([0, np.nan]))
+    assert not array_equivalent(DatetimeIndex([0, np.nan]), DatetimeIndex([1, np.nan]))
+
 def test_datetimeindex_from_empty_datetime64_array():
     for unit in [ 'ms', 'us', 'ns' ]:
         idx = DatetimeIndex(np.array([], dtype='datetime64[%s]' % unit))
@@ -175,7 +220,7 @@ def test_nan_to_nat_conversions():
     assert(result == iNaT)
 
     s = df['B'].copy()
-    s._data = s._data.setitem(tuple([slice(8,9)]),np.nan)
+    s._data = s._data.setitem(indexer=tuple([slice(8,9)]),value=np.nan)
     assert(isnull(s[8]))
 
     # numpy < 1.7.0 is wrong
@@ -777,10 +822,10 @@ class TestTake(tm.TestCase):
 
         result = com.take_1d(arr, [0, 2, 2, 1])
         expected = arr.take([0, 2, 2, 1])
-        self.assert_(np.array_equal(result, expected))
+        self.assert_numpy_array_equal(result, expected)
 
         result = com.take_1d(arr, [0, 2, -1])
-        self.assert_(result.dtype == np.object_)
+        self.assertEqual(result.dtype, np.object_)
 
     def test_2d_bool(self):
         arr = np.array([[0, 1, 0],
@@ -789,14 +834,14 @@ class TestTake(tm.TestCase):
 
         result = com.take_nd(arr, [0, 2, 2, 1])
         expected = arr.take([0, 2, 2, 1], axis=0)
-        self.assert_(np.array_equal(result, expected))
+        self.assert_numpy_array_equal(result, expected)
 
         result = com.take_nd(arr, [0, 2, 2, 1], axis=1)
         expected = arr.take([0, 2, 2, 1], axis=1)
-        self.assert_(np.array_equal(result, expected))
+        self.assert_numpy_array_equal(result, expected)
 
         result = com.take_nd(arr, [0, 2, -1])
-        self.assert_(result.dtype == np.object_)
+        self.assertEqual(result.dtype, np.object_)
 
     def test_2d_float32(self):
         arr = np.random.randn(4, 3).astype(np.float32)

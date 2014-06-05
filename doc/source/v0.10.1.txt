@@ -65,13 +65,12 @@ perform queries on a table, by passing a list to ``data_columns``
 
 Retrieving unique values in an indexable or data column.
 
-.. ipython:: python
+.. code-block:: python
 
-   import warnings
-   with warnings.catch_warnings():
-       warnings.simplefilter('ignore', category=UserWarning)
-       store.unique('df','index')
-       store.unique('df','string')
+   # note that this is deprecated as of 0.14.0
+   # can be replicated by: store.select_column('df','index').unique()
+   store.unique('df','index')
+   store.unique('df','string')
 
 You can now store ``datetime64`` in data columns
 

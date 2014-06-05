@@ -79,15 +79,9 @@ SQL
 .. autosummary::
    :toctree: generated/
 
+   read_sql_table
+   read_sql_query
    read_sql
-
-.. currentmodule:: pandas.io.sql
-
-.. autosummary::
-   :toctree: generated/
-
-   read_frame
-   write_frame
 
 Google BigQuery
 ~~~~~~~~~~~~~~~
@@ -133,6 +127,7 @@ Data manipulations
    :toctree: generated/
 
    melt
+   pivot
    pivot_table
    crosstab
    cut
@@ -140,6 +135,7 @@ Data manipulations
    merge
    concat
    get_dummies
+   factorize
 
 Top-level missing data
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -249,8 +245,7 @@ Attributes and underlying data
 
    Series.values
    Series.dtype
-   Series.isnull
-   Series.notnull
+   Series.ftype
 
 Conversion
 ~~~~~~~~~~
@@ -327,6 +322,7 @@ Computations / Descriptive Stats
    :toctree: generated/
 
    Series.abs
+   Series.all
    Series.any
    Series.autocorr
    Series.between
@@ -342,6 +338,7 @@ Computations / Descriptive Stats
    Series.cumsum
    Series.describe
    Series.diff
+   Series.factorize
    Series.kurt
    Series.mad
    Series.max
@@ -349,7 +346,6 @@ Computations / Descriptive Stats
    Series.median
    Series.min
    Series.mode
-   Series.nunique
    Series.pct_change
    Series.prod
    Series.quantile
@@ -357,8 +353,9 @@ Computations / Descriptive Stats
    Series.skew
    Series.std
    Series.sum
-   Series.unique
    Series.var
+   Series.unique
+   Series.nunique
    Series.value_counts
 
 Reindexing / Selection / Label manipulation
@@ -368,6 +365,7 @@ Reindexing / Selection / Label manipulation
 
    Series.align
    Series.drop
+   Series.equals
    Series.first
    Series.head
    Series.idxmax
@@ -425,7 +423,6 @@ Time series-related
    Series.shift
    Series.first_valid_index
    Series.last_valid_index
-   Series.weekday
    Series.resample
    Series.tz_convert
    Series.tz_localize
@@ -468,6 +465,7 @@ details the methods show up here as methods of the
    StringMethods.strip
    StringMethods.title
    StringMethods.upper
+   StringMethods.get_dummies
 
 Plotting
 ~~~~~~~~
@@ -490,8 +488,11 @@ Serialization / IO / Conversion
    Series.to_dict
    Series.to_frame
    Series.to_hdf
+   Series.to_sql
+   Series.to_msgpack
    Series.to_json
    Series.to_sparse
+   Series.to_dense
    Series.to_string
    Series.to_clipboard
 
@@ -519,7 +520,9 @@ Attributes and underlying data
 
    DataFrame.as_matrix
    DataFrame.dtypes
+   DataFrame.ftypes
    DataFrame.get_dtype_counts
+   DataFrame.get_ftype_counts
    DataFrame.values
    DataFrame.axes
    DataFrame.ndim
@@ -612,6 +615,7 @@ Computations / Descriptive Stats
    :toctree: generated/
 
    DataFrame.abs
+   DataFrame.all
    DataFrame.any
    DataFrame.clip
    DataFrame.clip_lower
@@ -654,6 +658,7 @@ Reindexing / Selection / Label manipulation
    DataFrame.drop
    DataFrame.drop_duplicates
    DataFrame.duplicated
+   DataFrame.equals
    DataFrame.filter
    DataFrame.first
    DataFrame.head
@@ -747,14 +752,18 @@ Serialization / IO / Conversion
    DataFrame.to_pickle
    DataFrame.to_csv
    DataFrame.to_hdf
+   DataFrame.to_sql
    DataFrame.to_dict
    DataFrame.to_excel
    DataFrame.to_json
    DataFrame.to_html
    DataFrame.to_latex
    DataFrame.to_stata
+   DataFrame.to_msgpack
+   DataFrame.to_gbq
    DataFrame.to_records
    DataFrame.to_sparse
+   DataFrame.to_dense
    DataFrame.to_string
    DataFrame.to_clipboard
 
@@ -785,6 +794,10 @@ Attributes and underlying data
    Panel.axes
    Panel.ndim
    Panel.shape
+   Panel.dtypes
+   Panel.ftypes
+   Panel.get_dtype_counts
+   Panel.get_ftype_counts
 
 Conversion
 ~~~~~~~~~~
@@ -895,6 +908,7 @@ Reindexing / Selection / Label manipulation
    Panel.add_prefix
    Panel.add_suffix
    Panel.drop
+   Panel.equals
    Panel.filter
    Panel.first
    Panel.last
@@ -958,6 +972,49 @@ Serialization / IO / Conversion
    Panel.to_frame
    Panel.to_clipboard
 
+.. _api.panel4d:
+
+Panel4D
+-------
+
+Constructor
+~~~~~~~~~~~
+.. autosummary::
+   :toctree: generated/
+
+   Panel4D
+
+Attributes and underlying data
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+**Axes**
+
+  * **labels**: axis 1; each label corresponds to a Panel contained inside
+  * **items**: axis 2; each item corresponds to a DataFrame contained inside
+  * **major_axis**: axis 3; the index (rows) of each of the DataFrames
+  * **minor_axis**: axis 4; the columns of each of the DataFrames
+
+.. autosummary::
+   :toctree: generated/
+
+   Panel4D.values
+   Panel4D.axes
+   Panel4D.ndim
+   Panel4D.shape
+   Panel4D.dtypes
+   Panel4D.ftypes
+   Panel4D.get_dtype_counts
+   Panel4D.get_ftype_counts
+
+Conversion
+~~~~~~~~~~
+.. autosummary::
+   :toctree: generated/
+
+   Panel4D.astype
+   Panel4D.copy
+   Panel4D.isnull
+   Panel4D.notnull
+
 .. _api.index:
 
 Index
@@ -980,8 +1037,10 @@ Modifying and Computations
    Index.copy
    Index.delete
    Index.diff
+   Index.sym_diff
    Index.drop
    Index.equals
+   Index.factorize
    Index.identical
    Index.insert
    Index.order
@@ -989,6 +1048,8 @@ Modifying and Computations
    Index.repeat
    Index.set_names
    Index.unique
+   Index.nunique
+   Index.value_counts
 
 Conversion
 ~~~~~~~~~~
@@ -1080,7 +1141,15 @@ Time/Date Components
    DatetimeIndex.dayofweek
    DatetimeIndex.weekday
    DatetimeIndex.quarter
-
+   DatetimeIndex.tz
+   DatetimeIndex.freq
+   DatetimeIndex.freqstr
+   DatetimeIndex.is_month_start
+   DatetimeIndex.is_month_end
+   DatetimeIndex.is_quarter_start
+   DatetimeIndex.is_quarter_end
+   DatetimeIndex.is_year_start
+   DatetimeIndex.is_year_end
 
 Selecting
 ~~~~~~~~~
@@ -1110,7 +1179,7 @@ Conversion
    DatetimeIndex.to_datetime
    DatetimeIndex.to_period
    DatetimeIndex.to_pydatetime
-
+   DatetimeIndex.to_series
 
 GroupBy
 -------
@@ -1122,11 +1191,20 @@ Indexing, iteration
 ~~~~~~~~~~~~~~~~~~~
 .. autosummary::
    :toctree: generated/
-   
+
    GroupBy.__iter__
    GroupBy.groups
    GroupBy.indices
    GroupBy.get_group
+
+.. currentmodule:: pandas
+
+.. autosummary::
+   :toctree: generated/
+
+   Grouper
+
+.. currentmodule:: pandas.core.groupby
 
 Function application
 ~~~~~~~~~~~~~~~~~~~~
@@ -1141,12 +1219,30 @@ Computations / Descriptive Stats
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 .. autosummary::
    :toctree: generated/
-   
+
    GroupBy.mean
    GroupBy.median
    GroupBy.std
    GroupBy.var
    GroupBy.ohlc
+
+.. currentmodule:: pandas
+
+General utility functions
+-------------------------
+
+Working with options
+~~~~~~~~~~~~~~~~~~~~
+
+.. autosummary::
+   :toctree: generated/
+
+   describe_option
+   reset_option
+   get_option
+   set_option
+   option_context
+
 
 ..
     HACK - see github issue #4539. To ensure old links remain valid, include
@@ -1155,7 +1251,7 @@ Computations / Descriptive Stats
 
 .. toctree::
    :hidden:
-   
+
    generated/pandas.core.common.isnull
    generated/pandas.core.common.notnull
    generated/pandas.core.reshape.get_dummies
@@ -1174,6 +1270,8 @@ Computations / Descriptive Stats
    generated/pandas.io.pytables.HDFStore.select
    generated/pandas.io.pytables.read_hdf
    generated/pandas.io.sql.read_sql
+   generated/pandas.io.sql.read_frame
+   generated/pandas.io.sql.write_frame
    generated/pandas.io.stata.read_stata
    generated/pandas.stats.moments.ewma
    generated/pandas.stats.moments.ewmcorr

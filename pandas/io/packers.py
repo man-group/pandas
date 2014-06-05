@@ -147,11 +147,11 @@ def read_msgpack(path_or_buf, iterator=False, **kwargs):
     if isinstance(path_or_buf, compat.string_types):
 
         try:
-            path_exists = os.path.exists(path_or_buf)
-        except (TypeError):
-            path_exists = False
+            exists = os.path.exists(path_or_buf)
+        except (TypeError,ValueError):
+            exists = False
 
-        if path_exists:
+        if exists:
             with open(path_or_buf, 'rb') as fh:
                 return read(fh)
 
@@ -356,7 +356,7 @@ def encode(obj):
             return {'typ': 'block_manager',
                     'klass': obj.__class__.__name__,
                     'axes': data.axes,
-                    'blocks': [{'items': b.items,
+                    'blocks': [{'items': data.items.take(b.mgr_locs),
                                 'values': convert(b.values),
                                 'shape': b.values.shape,
                                 'dtype': b.dtype.num,
@@ -458,18 +458,19 @@ def decode(obj):
         return globals()[obj['klass']].from_tuples(data, names=obj['names'])
     elif typ == 'period_index':
         data = unconvert(obj['data'], np.int64, obj.get('compress'))
-        return globals()[obj['klass']](data, name=obj['name'],
-                                       freq=obj['freq'])
+        d = dict(name=obj['name'], freq=obj['freq'])
+        return globals()[obj['klass']](data, **d)
     elif typ == 'datetime_index':
         data = unconvert(obj['data'], np.int64, obj.get('compress'))
-        result = globals()[obj['klass']](data, freq=obj['freq'],
-                                         name=obj['name'])
+        d = dict(name=obj['name'], freq=obj['freq'], verify_integrity=False)
+        result = globals()[obj['klass']](data, **d)
         tz = obj['tz']
 
         # reverse tz conversion
         if tz is not None:
             result = result.tz_localize('UTC').tz_convert(tz)
         return result
+
     elif typ == 'series':
         dtype = dtype_for(obj['dtype'])
         index = obj['index']
@@ -480,10 +481,11 @@ def decode(obj):
         axes = obj['axes']
 
         def create_block(b):
-            dtype = dtype_for(b['dtype'])
-            return make_block(unconvert(b['values'], dtype, b['compress'])
-                              .reshape(b['shape']), b['items'], axes[0],
-                              klass=getattr(internals, b['klass']))
+            values = unconvert(b['values'], dtype_for(b['dtype']),
+                               b['compress']).reshape(b['shape'])
+            return make_block(values=values,
+                              klass=getattr(internals, b['klass']),
+                              placement=axes[0].get_indexer(b['items']))
 
         blocks = [create_block(b) for b in obj['blocks']]
         return globals()[obj['klass']](BlockManager(blocks, axes))

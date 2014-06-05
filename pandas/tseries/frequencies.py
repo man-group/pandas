@@ -13,7 +13,6 @@ import pandas.core.common as com
 import pandas.lib as lib
 import pandas.tslib as tslib
 
-
 class FreqGroup(object):
     FR_ANN = 1000
     FR_QTR = 2000
@@ -240,21 +239,6 @@ for _i, _weekday in enumerate(['MON', 'TUE', 'WED', 'THU', 'FRI']):
 _legacy_reverse_map = dict((v, k) for k, v in
                            reversed(sorted(compat.iteritems(_rule_aliases))))
 
-
-def inferTimeRule(index):
-    from pandas.tseries.index import DatetimeIndex
-    import warnings
-    warnings.warn("This method is deprecated, use infer_freq or inferred_freq"
-                  " attribute of DatetimeIndex", FutureWarning)
-
-    freq = DatetimeIndex(index).inferred_freq
-    if freq is None:
-        raise Exception('Unable to infer time rule')
-
-    offset = to_offset(freq)
-    return get_legacy_offset_name(offset)
-
-
 def to_offset(freqstr):
     """
     Return DateOffset object from string representation
@@ -283,11 +267,11 @@ def to_offset(freqstr):
         try:
             for stride, name, _ in opattern.findall(freqstr):
                 offset = get_offset(name)
+                if stride_sign is None:
+                    stride_sign = -1 if stride.startswith('-') else 1
                 if not stride:
                     stride = 1
                 stride = int(stride)
-                if stride_sign is None:
-                    stride_sign = np.sign(stride)
                 offset = offset * int(np.fabs(stride) * stride_sign)
                 if delta is None:
                     delta = offset
@@ -337,7 +321,7 @@ def get_base_alias(freqstr):
     """
     return _base_and_stride(freqstr)[0]
 
-_dont_uppercase = ['MS', 'ms']
+_dont_uppercase = set(('MS', 'ms'))
 
 
 def get_offset(name):
@@ -358,7 +342,7 @@ def get_offset(name):
     else:
         if name in _rule_aliases:
             name = _rule_aliases[name]
-            
+
     if name not in _offset_map:
         try:
             # generate and cache offset
@@ -497,7 +481,7 @@ def _period_alias_dictionary():
     H_aliases = ["H", "HR", "HOUR", "HRLY", "HOURLY"]
     T_aliases = ["T", "MIN", "MINUTE", "MINUTELY"]
     S_aliases = ["S", "SEC", "SECOND", "SECONDLY"]
-    L_aliases = ["L", "MS", "MILLISECOND", "MILLISECONDLY"]
+    L_aliases = ["L", "ms", "MILLISECOND", "MILLISECONDLY"]
     U_aliases = ["U", "US", "MICROSECOND", "MICROSECONDLY"]
     N_aliases = ["N", "NS", "NANOSECOND", "NANOSECONDLY"]
 
@@ -615,17 +599,20 @@ _period_alias_dict = _period_alias_dictionary()
 def _period_str_to_code(freqstr):
     # hack
     freqstr = _rule_aliases.get(freqstr, freqstr)
-    freqstr = _rule_aliases.get(freqstr.lower(), freqstr)
+    
+    if freqstr not in _dont_uppercase:
+        freqstr = _rule_aliases.get(freqstr.lower(), freqstr)
 
     try:
-        freqstr = freqstr.upper()
+        if freqstr not in _dont_uppercase:
+            freqstr = freqstr.upper()
         return _period_code_map[freqstr]
     except KeyError:
         try:
             alias = _period_alias_dict[freqstr]
         except KeyError:
             raise ValueError("Unknown freqstr: %s" % freqstr)
-        
+
         return _period_code_map[alias]
 
 
@@ -637,18 +624,31 @@ def infer_freq(index, warn=True):
     Parameters
     ----------
     index : DatetimeIndex
+            if passed a Series will use the values of the series (NOT THE INDEX)
     warn : boolean, default True
 
     Returns
     -------
     freq : string or None
         None if no discernible frequency
+        TypeError if the index is not datetime-like
     """
-    from pandas.tseries.index import DatetimeIndex
+    import pandas as pd
 
-    if not isinstance(index, DatetimeIndex):
-        index = DatetimeIndex(index)
+    if isinstance(index, com.ABCSeries):
+        values = index.values
+        if not (com.is_datetime64_dtype(index.values) or values.dtype == object):
+            raise TypeError("cannot infer freq from a non-convertible dtype on a Series of {0}".format(index.dtype))
+        index = values
+    if isinstance(index, pd.PeriodIndex):
+        raise TypeError("PeriodIndex given. Check the `freq` attribute "
+                         "instead of using infer_freq.")
+    if isinstance(index, pd.Index) and not isinstance(index, pd.DatetimeIndex):
+        if isinstance(index, (pd.Int64Index, pd.Float64Index)):
+            raise TypeError("cannot infer freq from a non-convertible index type {0}".format(type(index)))
+        index = index.values
 
+    index = pd.DatetimeIndex(index)
     inferer = _FrequencyInferer(index, warn=warn)
     return inferer.get_freq()
 
@@ -668,6 +668,9 @@ class _FrequencyInferer(object):
     def __init__(self, index, warn=True):
         self.index = index
         self.values = np.asarray(index).view('i8')
+        if index.tz is not None:
+            self.values = tslib.date_normalize(self.values, index.tz)
+
         self.warn = warn
 
         if len(index) < 3:
@@ -850,7 +853,7 @@ class _FrequencyInferer(object):
         weekdays = unique(self.index.weekday)
         if len(weekdays) > 1:
             return None
-        
+
         week_of_months = unique((self.index.day - 1) // 7)
         if len(week_of_months) > 1:
             return None

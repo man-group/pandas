@@ -6,12 +6,14 @@ Offer fast expression evaluation through numexpr
 
 """
 
+import warnings
 import numpy as np
 from pandas.core.common import _values_from_object
+from distutils.version import LooseVersion
 
 try:
     import numexpr as ne
-    _NUMEXPR_INSTALLED = True
+    _NUMEXPR_INSTALLED = ne.__version__ >= LooseVersion('2.0')
 except ImportError:  # pragma: no cover
     _NUMEXPR_INSTALLED = False
 
@@ -88,12 +90,18 @@ def _can_use_numexpr(op, op_str, a, b, dtype_check):
     return False
 
 
-def _evaluate_numexpr(op, op_str, a, b, raise_on_error=False, truediv=True,
+def _evaluate_numexpr(op, op_str, a, b, raise_on_error=False, truediv=True, reversed=False,
                       **eval_kwargs):
     result = None
 
     if _can_use_numexpr(op, op_str, a, b, 'evaluate'):
         try:
+
+            # we were originally called by a reversed op
+            # method
+            if reversed:
+                a,b = b,a
+
             a_value = getattr(a, "values", a)
             b_value = getattr(b, "values", b)
             result = ne.evaluate('a_value %s b_value' % op_str,
@@ -153,6 +161,35 @@ def _where_numexpr(cond, a, b, raise_on_error=False):
 set_use_numexpr(True)
 
 
+def _has_bool_dtype(x):
+    try:
+        return x.dtype == bool
+    except AttributeError:
+        try:
+            return 'bool' in x.blocks
+        except AttributeError:
+            return isinstance(x, (bool, np.bool_))
+
+
+def _bool_arith_check(op_str, a, b, not_allowed=frozenset(('/', '//', '**')),
+                      unsupported=None):
+    if unsupported is None:
+        unsupported = {'+': '|', '*': '&', '-': '^'}
+
+    if _has_bool_dtype(a) and _has_bool_dtype(b):
+        if op_str in unsupported:
+            warnings.warn("evaluating in Python space because the %r operator"
+                          " is not supported by numexpr for the bool "
+                          "dtype, use %r instead" % (op_str,
+                                                     unsupported[op_str]))
+            return False
+
+        if op_str in not_allowed:
+            raise NotImplementedError("operator %r not implemented for bool "
+                                      "dtypes" % op_str)
+    return True
+
+
 def evaluate(op, op_str, a, b, raise_on_error=False, use_numexpr=True,
              **eval_kwargs):
     """ evaluate and return the expression of the op on a and b
@@ -169,7 +206,7 @@ def evaluate(op, op_str, a, b, raise_on_error=False, use_numexpr=True,
                          return the results
         use_numexpr : whether to try to use numexpr (default True)
         """
-
+    use_numexpr = use_numexpr and _bool_arith_check(op_str, a, b)
     if use_numexpr:
         return _evaluate(op, op_str, a, b, raise_on_error=raise_on_error,
                          **eval_kwargs)

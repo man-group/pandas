@@ -3,13 +3,13 @@
 """Top level ``eval`` module.
 """
 
-import numbers
-import numpy as np
-
+import tokenize
 from pandas.core import common as com
-from pandas.compat import string_types
-from pandas.computation.expr import Expr, _parsers, _ensure_scope
+from pandas.computation.expr import Expr, _parsers, tokenize_string
+from pandas.computation.scope import _ensure_scope
+from pandas.compat import DeepChainMap, builtins
 from pandas.computation.engines import _engines
+from distutils.version import LooseVersion
 
 
 def _check_engine(engine):
@@ -38,7 +38,13 @@ def _check_engine(engine):
             import numexpr
         except ImportError:
             raise ImportError("'numexpr' not found. Cannot use "
-                              "engine='numexpr' if 'numexpr' is not installed")
+                              "engine='numexpr' for query/eval "
+                              "if 'numexpr' is not installed")
+        else:
+            ne_version = numexpr.__version__
+            if ne_version < LooseVersion('2.0'):
+                raise ImportError("'numexpr' version is %s, "
+                                  "must be >= 2.0" % ne_version)
 
 
 def _check_parser(parser):
@@ -63,8 +69,8 @@ def _check_resolvers(resolvers):
         for resolver in resolvers:
             if not hasattr(resolver, '__getitem__'):
                 name = type(resolver).__name__
-                raise AttributeError('Resolver of type {0!r} must implement '
-                                     'the __getitem__ method'.format(name))
+                raise TypeError('Resolver of type %r does not implement '
+                                'the __getitem__ method' % name)
 
 
 def _check_expression(expr):
@@ -112,8 +118,26 @@ def _convert_expression(expr):
     return s
 
 
+def _check_for_locals(expr, stack_level, parser):
+    at_top_of_stack = stack_level == 0
+    not_pandas_parser = parser != 'pandas'
+
+    if not_pandas_parser:
+        msg = "The '@' prefix is only supported by the pandas parser"
+    elif at_top_of_stack:
+        msg = ("The '@' prefix is not allowed in "
+               "top-level eval calls, \nplease refer to "
+               "your variables by name without the '@' "
+               "prefix")
+
+    if at_top_of_stack or not_pandas_parser:
+        for toknum, tokval in tokenize_string(expr):
+            if toknum == tokenize.OP and tokval == '@':
+                raise SyntaxError(msg)
+
+
 def eval(expr, parser='pandas', engine='numexpr', truediv=True,
-         local_dict=None, global_dict=None, resolvers=None, level=2,
+         local_dict=None, global_dict=None, resolvers=(), level=0,
          target=None):
     """Evaluate a Python expression as a string using various backends.
 
@@ -194,10 +218,13 @@ def eval(expr, parser='pandas', engine='numexpr', truediv=True,
     _check_engine(engine)
     _check_parser(parser)
     _check_resolvers(resolvers)
+    _check_for_locals(expr, level, parser)
 
     # get our (possibly passed-in) scope
-    env = _ensure_scope(global_dict=global_dict, local_dict=local_dict,
-                        resolvers=resolvers, level=level, target=target)
+    level += 1
+    env = _ensure_scope(level, global_dict=global_dict,
+                        local_dict=local_dict, resolvers=resolvers,
+                        target=target)
 
     parsed_expr = Expr(expr, engine=engine, parser=parser, env=env,
                        truediv=truediv)

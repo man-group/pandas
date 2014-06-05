@@ -289,6 +289,33 @@ df = DataFrame(data)
 frame_isnull  = Benchmark('isnull(df)', setup,
                            start_date=datetime(2012,1,1))
 
+## dropna
+setup = common_setup + """
+data = np.random.randn(10000, 1000)
+df = DataFrame(data)
+df.ix[50:1000,20:50] = np.nan
+df.ix[2000:3000] = np.nan
+df.ix[:,60:70] = np.nan
+"""
+frame_dropna_axis0_any  = Benchmark('df.dropna(how="any",axis=0)', setup,
+                                     start_date=datetime(2012,1,1))
+frame_dropna_axis0_all  = Benchmark('df.dropna(how="all",axis=0)', setup,
+                                     start_date=datetime(2012,1,1))
+
+setup = common_setup + """
+data = np.random.randn(10000, 1000)
+df = DataFrame(data)
+df.ix[50:1000,20:50] = np.nan
+df.ix[2000:3000] = np.nan
+df.ix[:,60:70] = np.nan
+"""
+frame_dropna_axis1_any  = Benchmark('df.dropna(how="any",axis=1)', setup,
+                                    start_date=datetime(2012,1,1))
+
+frame_dropna_axis1_all  = Benchmark('df.dropna(how="all",axis=1)', setup,
+                                    start_date=datetime(2012,1,1))
+
+
 #----------------------------------------------------------------------
 # apply
 
@@ -297,4 +324,140 @@ s = Series(np.arange(1028.))
 df = DataFrame({ i:s for i in range(1028) })
 """
 frame_apply_user_func = Benchmark('df.apply(lambda x: np.corrcoef(x,s)[0,1])', setup,
+                           name = 'frame_apply_user_func',
                            start_date=datetime(2012,1,1))
+
+setup = common_setup + """
+df = DataFrame(np.random.randn(1000,100))
+"""
+frame_apply_lambda_mean = Benchmark('df.apply(lambda x: x.sum())', setup,
+                                    name = 'frame_apply_lambda_mean',
+                                    start_date=datetime(2012,1,1))
+setup = common_setup + """
+df = DataFrame(np.random.randn(1000,100))
+"""
+frame_apply_np_mean = Benchmark('df.apply(np.mean)', setup,
+                               name = 'frame_apply_np_mean',
+                               start_date=datetime(2012,1,1))
+
+setup = common_setup + """
+df = DataFrame(np.random.randn(1000,100))
+"""
+frame_apply_pass_thru = Benchmark('df.apply(lambda x: x)', setup,
+                                  name = 'frame_apply_pass_thru',
+                                  start_date=datetime(2012,1,1))
+
+setup = common_setup + """
+df = DataFrame(np.random.randn(1000,100))
+"""
+frame_apply_axis_1 = Benchmark('df.apply(lambda x: x+1,axis=1)', setup,
+                               name = 'frame_apply_axis_1',
+                               start_date=datetime(2012,1,1))
+
+setup = common_setup + """
+df = DataFrame(np.random.randn(1000,3),columns=list('ABC'))
+"""
+frame_apply_ref_by_name = Benchmark('df.apply(lambda x: x["A"] + x["B"],axis=1)', setup,
+                                     name = 'frame_apply_ref_by_name',
+                                     start_date=datetime(2012,1,1))
+
+#----------------------------------------------------------------------
+# dtypes
+
+setup = common_setup + """
+df = DataFrame(np.random.randn(1000,1000))
+"""
+frame_dtypes = Benchmark('df.dtypes', setup,
+                         start_date=datetime(2012,1,1))
+
+#----------------------------------------------------------------------
+# equals
+setup = common_setup + """
+def make_pair(name):
+    df = globals()[name]
+    df2 = df.copy()
+    df2.ix[-1,-1] = np.nan
+    return df, df2
+
+def test_equal(name):
+    df, df2 = pairs[name]
+    return df.equals(df)
+
+def test_unequal(name):
+    df, df2 = pairs[name]
+    return df.equals(df2)
+
+float_df = DataFrame(np.random.randn(1000, 1000))
+object_df = DataFrame([['foo']*1000]*1000)
+nonunique_cols = object_df.copy()
+nonunique_cols.columns = ['A']*len(nonunique_cols.columns)
+
+pairs = dict([(name,make_pair(name))
+         for name in ('float_df', 'object_df', 'nonunique_cols')])
+"""
+frame_float_equal = Benchmark('test_equal("float_df")', setup)
+frame_object_equal = Benchmark('test_equal("object_df")', setup)
+frame_nonunique_equal = Benchmark('test_equal("nonunique_cols")', setup)
+
+frame_float_unequal = Benchmark('test_unequal("float_df")', setup)
+frame_object_unequal = Benchmark('test_unequal("object_df")', setup)
+frame_nonunique_unequal = Benchmark('test_unequal("nonunique_cols")', setup)
+
+#-----------------------------------------------------------------------------
+# interpolate
+# this is the worst case, where every column has NaNs.
+setup = common_setup + """
+df = DataFrame(randn(10000, 100))
+df.values[::2] = np.nan
+"""
+
+frame_interpolate = Benchmark('df.interpolate()', setup,
+                               start_date=datetime(2014, 2, 7))
+
+setup = common_setup + """
+df = DataFrame({'A': np.arange(0, 10000),
+                'B': np.random.randint(0, 100, 10000),
+                'C': randn(10000),
+                'D': randn(10000)})
+df.loc[1::5, 'A'] = np.nan
+df.loc[1::5, 'C'] = np.nan
+"""
+
+frame_interpolate_some_good = Benchmark('df.interpolate()', setup,
+                                        start_date=datetime(2014, 2, 7))
+frame_interpolate_some_good_infer = Benchmark('df.interpolate(downcast="infer")',
+                                              setup,
+                                              start_date=datetime(2014, 2, 7))
+
+
+#-------------------------------------------------------------------------
+# frame shift speedup issue-5609
+
+setup = common_setup + """
+df = DataFrame(np.random.rand(10000,500))
+# note: df._data.blocks are f_contigous
+"""
+frame_shift_axis0 = Benchmark('df.shift(1,axis=0)', setup,
+                    start_date=datetime(2014,1,1))
+frame_shift_axis1 = Benchmark('df.shift(1,axis=1)', setup,
+                    name = 'frame_shift_axis_1',
+                    start_date=datetime(2014,1,1))
+
+
+#-----------------------------------------------------------------------------
+# from_records issue-6700
+
+setup = common_setup + """
+def get_data(n=100000):
+    return ((x, x*20, x*100) for x in xrange(n))
+"""
+
+frame_from_records_generator = Benchmark('df = DataFrame.from_records(get_data())',
+                                setup,
+                                name='frame_from_records_generator',
+                                start_date=datetime(2013,10,04))  # issue-4911
+
+frame_from_records_generator_nrows = Benchmark('df = DataFrame.from_records(get_data(), nrows=1000)',
+                                setup,
+                                name='frame_from_records_generator_nrows',
+                                start_date=datetime(2013,10,04))  # issue-4911

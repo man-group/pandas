@@ -186,6 +186,7 @@ I/O Enhancements
     You can use ``pd.read_html()`` to read the output from ``DataFrame.to_html()`` like so
 
     .. ipython :: python
+       :okwarning:
 
         df = DataFrame({'a': range(3), 'b': list('abc')})
         print(df)
@@ -252,6 +253,7 @@ I/O Enhancements
     store when iteration is finished. This is only for *tables*
 
     .. ipython:: python
+       :okwarning:
 
          path = 'store_iterator.h5'
          DataFrame(randn(10,2)).to_hdf(path,'df',table=True)
@@ -368,6 +370,7 @@ Experimental Features
     .. ipython:: python
 
       from pandas.tseries.offsets import CustomBusinessDay
+      from datetime import datetime
       # As an interesting example, let's look at Egypt where
       # a Friday-Saturday weekend is observed.
       weekmask_egypt = 'Sun Mon Tue Wed Thu'
@@ -377,7 +380,7 @@ Experimental Features
       bday_egypt = CustomBusinessDay(holidays=holidays, weekmask=weekmask_egypt)
       dt = datetime(2013, 4, 30)
       print(dt + 2 * bday_egypt)
-      dts = date_range(dt, periods=5, freq=bday_egypt).to_series()
+      dts = date_range(dt, periods=5, freq=bday_egypt)
       print(Series(dts.weekday, dts).map(Series('Mon Tue Wed Thu Fri Sat Sun'.split())))
 
 Bug Fixes

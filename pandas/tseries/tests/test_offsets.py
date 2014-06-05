@@ -5,13 +5,15 @@ from pandas import compat
 import nose
 from nose.tools import assert_raises
 
+
 import numpy as np
 
 from pandas.core.datetools import (
-    bday, BDay, cday, CDay, BQuarterEnd, BMonthEnd, BYearEnd, MonthEnd,
-    MonthBegin, BYearBegin, QuarterBegin, BQuarterBegin, BMonthBegin,
-    DateOffset, Week, YearBegin, YearEnd, Hour, Minute, Second, Day, Micro,
-    Milli, Nano,
+    bday, BDay, cday, CDay, BQuarterEnd, BMonthEnd,
+    CBMonthEnd, CBMonthBegin,
+    BYearEnd, MonthEnd, MonthBegin, BYearBegin,
+    QuarterBegin, BQuarterBegin, BMonthBegin, DateOffset, Week,
+    YearBegin, YearEnd, Hour, Minute, Second, Day, Micro, Milli, Nano, Easter,
     WeekOfMonth, format, ole2datetime, QuarterEnd, to_datetime, normalize_date,
     get_offset, get_offset_name, get_standard_freq)
 
@@ -20,12 +22,13 @@ from pandas.tseries.index import _to_m8, DatetimeIndex, _daterange_cache
 from pandas.tseries.tools import parse_time_string
 import pandas.tseries.offsets as offsets
 
-from pandas.tslib import monthrange, OutOfBoundsDatetime
+from pandas.tslib import monthrange, OutOfBoundsDatetime, NaT
 from pandas.lib import Timestamp
 from pandas.util.testing import assertRaisesRegexp
 import pandas.util.testing as tm
 from pandas.tseries.offsets import BusinessMonthEnd, CacheableOffset, \
     LastWeekOfMonth, FY5253, FY5253Quarter, WeekDay
+from pandas.tseries.holiday import USFederalHolidayCalendar
 
 from pandas import _np_version_under1p7
 
@@ -94,26 +97,67 @@ def test_to_m8():
 ### DateOffset Tests
 #####
 
-class TestBase(tm.TestCase):
+class Base(tm.TestCase):
     _offset = None
+
+    offset_types = [getattr(offsets, o) for o in offsets.__all__]
+    skip_np_u1p7 = [offsets.CustomBusinessDay, offsets.CDay, offsets.CustomBusinessMonthBegin, offsets.CustomBusinessMonthEnd, offsets.Nano]
+
+    def _get_offset(self, klass, value=1):
+        # create instance from offset class
+        if klass is FY5253 or klass is FY5253Quarter:
+            klass = klass(n=value, startingMonth=1, weekday=1,
+                            qtr_with_extra_week=1, variation='last')
+        elif klass is WeekOfMonth or klass is LastWeekOfMonth:
+            klass = LastWeekOfMonth(n=value, weekday=5)
+        else:
+            try:
+                klass = klass(value)
+            except:
+                klass = klass()
+        return klass
 
     def test_apply_out_of_range(self):
         if self._offset is None:
-            raise nose.SkipTest("_offset not defined")
+            return
+        if _np_version_under1p7 and self._offset in self.skip_np_u1p7:
+            raise nose.SkipTest('numpy >= 1.7 required')
 
         # try to create an out-of-bounds result timestamp; if we can't create the offset
         # skip
         try:
-            offset = self._offset(10000)
+            offset = self._get_offset(self._offset, value=10000)
 
             result = Timestamp('20080101') + offset
-            self.assert_(isinstance(result, datetime))
+            self.assertIsInstance(result, datetime)
         except (OutOfBoundsDatetime):
             raise
-        except (ValueError, KeyError):
-            raise nose.SkipTest("cannot create out_of_range offset")
+        except (ValueError, KeyError) as e:
+            raise nose.SkipTest("cannot create out_of_range offset: {0} {1}".format(str(self).split('.')[-1],e))
 
-class TestDateOffset(TestBase):
+
+class TestOps(Base):
+
+    def test_return_type(self):
+        for offset in self.offset_types:
+            if _np_version_under1p7 and offset in self.skip_np_u1p7:
+                continue
+
+            offset = self._get_offset(offset)
+
+            # make sure that we are returning a Timestamp
+            result = Timestamp('20080101') + offset
+            self.assertIsInstance(result, Timestamp)
+
+            # make sure that we are returning NaT
+            self.assertTrue(NaT + offset is NaT)
+            self.assertTrue(offset + NaT is NaT)
+
+            self.assertTrue(NaT - offset is NaT)
+            self.assertTrue((-offset).apply(NaT) is NaT)
+
+
+class TestDateOffset(Base):
     _multiprocess_can_split_ = True
 
     def setUp(self):
@@ -150,11 +194,10 @@ class TestDateOffset(TestBase):
         offset1 = DateOffset(days=1)
         offset2 = DateOffset(days=365)
 
-        self.assert_(offset1 != offset2)
-        self.assert_(not (offset1 == offset2))
+        self.assertNotEqual(offset1, offset2)
 
 
-class TestBusinessDay(TestBase):
+class TestBusinessDay(Base):
     _multiprocess_can_split_ = True
     _offset = BDay
 
@@ -318,6 +361,11 @@ class TestBusinessDay(TestBase):
         xp = datetime(2011, 12, 26)
         self.assertEqual(rs, xp)
 
+        off = BDay() * 10
+        rs = datetime(2014, 1, 5) + off # see #5890
+        xp = datetime(2014, 1, 17)
+        self.assertEqual(rs, xp)
+
     def test_apply_corner(self):
         self.assertRaises(TypeError, BDay().apply, BMonthEnd())
 
@@ -328,12 +376,13 @@ class TestBusinessDay(TestBase):
         self.assertFalse(offset1 != offset2)
 
 
-class TestCustomBusinessDay(TestBase):
+class TestCustomBusinessDay(Base):
     _multiprocess_can_split_ = True
     _offset = CDay
 
     def setUp(self):
         self.d = datetime(2008, 1, 1)
+        self.nd = np.datetime64('2008-01-01 00:00:00Z')
 
         _skip_if_no_cday()
         self.offset = CDay()
@@ -369,6 +418,7 @@ class TestCustomBusinessDay(TestBase):
 
     def testCall(self):
         self.assertEqual(self.offset2(self.d), datetime(2008, 1, 3))
+        self.assertEqual(self.offset2(self.nd), datetime(2008, 1, 3))
 
     def testRAdd(self):
         self.assertEqual(self.d + self.offset2, self.offset2 + self.d)
@@ -542,6 +592,286 @@ class TestCustomBusinessDay(TestBase):
         xp_egypt = datetime(2013, 5, 5)
         self.assertEqual(xp_egypt, dt + 2 * bday_egypt)
 
+    def test_calendar(self):
+        calendar = USFederalHolidayCalendar()
+        dt = datetime(2014, 1, 17)
+        assertEq(CDay(calendar=calendar), dt, datetime(2014, 1, 21))
+
+class CustomBusinessMonthBase(object):
+    _multiprocess_can_split_ = True
+
+    def setUp(self):
+        self.d = datetime(2008, 1, 1)
+
+        _skip_if_no_cday()
+        self.offset = self._object()
+        self.offset2 = self._object(2)
+
+    def testEQ(self):
+        self.assertEqual(self.offset2, self.offset2)
+
+    def test_mul(self):
+        pass
+
+    def test_hash(self):
+        self.assertEqual(hash(self.offset2), hash(self.offset2))
+
+    def testRAdd(self):
+        self.assertEqual(self.d + self.offset2, self.offset2 + self.d)
+
+    def testSub(self):
+        off = self.offset2
+        self.assertRaises(Exception, off.__sub__, self.d)
+        self.assertEqual(2 * off - off, off)
+
+        self.assertEqual(self.d - self.offset2,
+                         self.d + self._object(-2))
+
+    def testRSub(self):
+        self.assertEqual(self.d - self.offset2, (-self.offset2).apply(self.d))
+
+    def testMult1(self):
+        self.assertEqual(self.d + 10 * self.offset,
+                         self.d + self._object(10))
+
+    def testMult2(self):
+        self.assertEqual(self.d + (-5 * self._object(-10)),
+                         self.d + self._object(50))
+
+    def test_offsets_compare_equal(self):
+        offset1 = self._object()
+        offset2 = self._object()
+        self.assertFalse(offset1 != offset2)
+
+class TestCustomBusinessMonthEnd(CustomBusinessMonthBase, Base):
+    _object = CBMonthEnd
+
+    def test_different_normalize_equals(self):
+        # equivalent in this special case
+        offset = CBMonthEnd()
+        offset2 = CBMonthEnd()
+        offset2.normalize = True
+        self.assertEqual(offset, offset2)
+
+    def test_repr(self):
+        assert repr(self.offset) == '<CustomBusinessMonthEnd>'
+        assert repr(self.offset2) == '<2 * CustomBusinessMonthEnds>'
+
+    def testCall(self):
+        self.assertEqual(self.offset2(self.d), datetime(2008, 2, 29))
+
+    def testRollback1(self):
+        self.assertEqual(
+            CDay(10).rollback(datetime(2007, 12, 31)), datetime(2007, 12, 31))
+
+    def testRollback2(self):
+        self.assertEqual(CBMonthEnd(10).rollback(self.d),
+                         datetime(2007,12,31))
+
+    def testRollforward1(self):
+        self.assertEqual(CBMonthEnd(10).rollforward(self.d), datetime(2008,1,31))
+
+    def test_roll_date_object(self):
+        offset = CBMonthEnd()
+
+        dt = date(2012, 9, 15)
+
+        result = offset.rollback(dt)
+        self.assertEqual(result, datetime(2012, 8, 31))
+
+        result = offset.rollforward(dt)
+        self.assertEqual(result, datetime(2012, 9, 28))
+
+        offset = offsets.Day()
+        result = offset.rollback(dt)
+        self.assertEqual(result, datetime(2012, 9, 15))
+
+        result = offset.rollforward(dt)
+        self.assertEqual(result, datetime(2012, 9, 15))
+
+    def test_onOffset(self):
+        tests = [(CBMonthEnd(), datetime(2008, 1, 31), True),
+                 (CBMonthEnd(), datetime(2008, 1, 1), False)]
+
+        for offset, date, expected in tests:
+            assertOnOffset(offset, date, expected)
+
+
+    def test_apply(self):
+        cbm = CBMonthEnd()
+        tests = []
+
+        tests.append((cbm,
+                      {datetime(2008, 1, 1): datetime(2008, 1, 31),
+                       datetime(2008, 2, 7): datetime(2008, 2, 29)}))
+
+        tests.append((2 * cbm,
+                      {datetime(2008, 1, 1): datetime(2008, 2, 29),
+                       datetime(2008, 2, 7): datetime(2008, 3, 31)}))
+
+        tests.append((-cbm,
+                      {datetime(2008, 1, 1): datetime(2007, 12, 31),
+                       datetime(2008, 2, 8): datetime(2008, 1, 31)}))
+
+        tests.append((-2 * cbm,
+                      {datetime(2008, 1, 1): datetime(2007, 11, 30),
+                       datetime(2008, 2, 9): datetime(2007, 12, 31)}))
+
+        tests.append((CBMonthEnd(0),
+                      {datetime(2008, 1, 1): datetime(2008, 1, 31),
+                       datetime(2008, 2, 7): datetime(2008, 2, 29)}))
+
+        for offset, cases in tests:
+            for base, expected in compat.iteritems(cases):
+                assertEq(offset, base, expected)
+
+    def test_apply_large_n(self):
+        dt = datetime(2012, 10, 23)
+
+        result = dt + CBMonthEnd(10)
+        self.assertEqual(result, datetime(2013, 7, 31))
+
+        result = dt + CDay(100) - CDay(100)
+        self.assertEqual(result, dt)
+
+        off = CBMonthEnd() * 6
+        rs = datetime(2012, 1, 1) - off
+        xp = datetime(2011, 7, 29)
+        self.assertEqual(rs, xp)
+
+        st = datetime(2011, 12, 18)
+        rs = st + off
+        xp = datetime(2012, 5, 31)
+        self.assertEqual(rs, xp)
+
+    def test_holidays(self):
+        # Define a TradingDay offset
+        holidays = ['2012-01-31', datetime(2012, 2, 28),
+                    np.datetime64('2012-02-29')]
+        bm_offset = CBMonthEnd(holidays=holidays)
+        dt = datetime(2012,1,1)
+        self.assertEqual(dt + bm_offset,datetime(2012,1,30))
+        self.assertEqual(dt + 2*bm_offset,datetime(2012,2,27))
+
+    def test_datetimeindex(self):
+        from pandas.tseries.holiday import USFederalHolidayCalendar
+        self.assertEqual(DatetimeIndex(start='20120101',end='20130101',freq=CBMonthEnd(calendar=USFederalHolidayCalendar())).tolist()[0],
+        datetime(2012,1,31))
+
+class TestCustomBusinessMonthBegin(CustomBusinessMonthBase, Base):
+    _object = CBMonthBegin
+
+    def test_different_normalize_equals(self):
+        # equivalent in this special case
+        offset = CBMonthBegin()
+        offset2 = CBMonthBegin()
+        offset2.normalize = True
+        self.assertEqual(offset, offset2)
+
+    def test_repr(self):
+        assert repr(self.offset) == '<CustomBusinessMonthBegin>'
+        assert repr(self.offset2) == '<2 * CustomBusinessMonthBegins>'
+
+    def testCall(self):
+        self.assertEqual(self.offset2(self.d), datetime(2008, 3, 3))
+
+    def testRollback1(self):
+        self.assertEqual(
+            CDay(10).rollback(datetime(2007, 12, 31)), datetime(2007, 12, 31))
+
+    def testRollback2(self):
+        self.assertEqual(CBMonthBegin(10).rollback(self.d),
+                         datetime(2008,1,1))
+
+    def testRollforward1(self):
+        self.assertEqual(CBMonthBegin(10).rollforward(self.d), datetime(2008,1,1))
+
+    def test_roll_date_object(self):
+        offset = CBMonthBegin()
+
+        dt = date(2012, 9, 15)
+
+        result = offset.rollback(dt)
+        self.assertEqual(result, datetime(2012, 9, 3))
+
+        result = offset.rollforward(dt)
+        self.assertEqual(result, datetime(2012, 10, 1))
+
+        offset = offsets.Day()
+        result = offset.rollback(dt)
+        self.assertEqual(result, datetime(2012, 9, 15))
+
+        result = offset.rollforward(dt)
+        self.assertEqual(result, datetime(2012, 9, 15))
+
+    def test_onOffset(self):
+        tests = [(CBMonthBegin(), datetime(2008, 1, 1), True),
+                 (CBMonthBegin(), datetime(2008, 1, 31), False)]
+
+        for offset, date, expected in tests:
+            assertOnOffset(offset, date, expected)
+
+
+    def test_apply(self):
+        cbm = CBMonthBegin()
+        tests = []
+
+        tests.append((cbm,
+                      {datetime(2008, 1, 1): datetime(2008, 2, 1),
+                       datetime(2008, 2, 7): datetime(2008, 3, 3)}))
+
+        tests.append((2 * cbm,
+                      {datetime(2008, 1, 1): datetime(2008, 3, 3),
+                       datetime(2008, 2, 7): datetime(2008, 4, 1)}))
+
+        tests.append((-cbm,
+                      {datetime(2008, 1, 1): datetime(2007, 12, 3),
+                       datetime(2008, 2, 8): datetime(2008, 2, 1)}))
+
+        tests.append((-2 * cbm,
+                      {datetime(2008, 1, 1): datetime(2007, 11, 1),
+                       datetime(2008, 2, 9): datetime(2008, 1, 1)}))
+
+        tests.append((CBMonthBegin(0),
+                      {datetime(2008, 1, 1): datetime(2008, 1, 1),
+                       datetime(2008, 1, 7): datetime(2008, 2, 1)}))
+
+        for offset, cases in tests:
+            for base, expected in compat.iteritems(cases):
+                assertEq(offset, base, expected)
+
+    def test_apply_large_n(self):
+        dt = datetime(2012, 10, 23)
+
+        result = dt + CBMonthBegin(10)
+        self.assertEqual(result, datetime(2013, 8, 1))
+
+        result = dt + CDay(100) - CDay(100)
+        self.assertEqual(result, dt)
+
+        off = CBMonthBegin() * 6
+        rs = datetime(2012, 1, 1) - off
+        xp = datetime(2011, 7, 1)
+        self.assertEqual(rs, xp)
+
+        st = datetime(2011, 12, 18)
+        rs = st + off
+        xp = datetime(2012, 6, 1)
+        self.assertEqual(rs, xp)
+
+    def test_holidays(self):
+        # Define a TradingDay offset
+        holidays = ['2012-02-01', datetime(2012, 2, 2),
+                    np.datetime64('2012-03-01')]
+        bm_offset = CBMonthBegin(holidays=holidays)
+        dt = datetime(2012,1,1)
+        self.assertEqual(dt + bm_offset,datetime(2012,1,2))
+        self.assertEqual(dt + 2*bm_offset,datetime(2012,2,3))
+
+    def test_datetimeindex(self):
+        self.assertEqual(DatetimeIndex(start='20120101',end='20130101',freq=CBMonthBegin(calendar=USFederalHolidayCalendar())).tolist()[0],
+        datetime(2012,1,3))
+
 
 def assertOnOffset(offset, date, expected):
     actual = offset.onOffset(date)
@@ -550,7 +880,7 @@ def assertOnOffset(offset, date, expected):
                                 (expected, actual, offset, date))
 
 
-class TestWeek(TestBase):
+class TestWeek(Base):
     _offset = Week
 
     def test_repr(self):
@@ -563,10 +893,10 @@ class TestWeek(TestBase):
         assertRaisesRegexp(ValueError, "Day must be", Week, weekday=-1)
 
     def test_isAnchored(self):
-        self.assert_(Week(weekday=0).isAnchored())
-        self.assert_(not Week().isAnchored())
-        self.assert_(not Week(2, weekday=2).isAnchored())
-        self.assert_(not Week(2).isAnchored())
+        self.assertTrue(Week(weekday=0).isAnchored())
+        self.assertFalse(Week().isAnchored())
+        self.assertFalse(Week(2, weekday=2).isAnchored())
+        self.assertFalse(Week(2).isAnchored())
 
     def test_offset(self):
         tests = []
@@ -621,7 +951,7 @@ class TestWeek(TestBase):
         self.assertFalse(offset1 != offset2)
 
 
-class TestWeekOfMonth(TestBase):
+class TestWeekOfMonth(Base):
     _offset = WeekOfMonth
 
     def test_constructor(self):
@@ -698,9 +1028,9 @@ class TestWeekOfMonth(TestBase):
 
         for week, weekday, date, expected in test_cases:
             offset = WeekOfMonth(week=week, weekday=weekday)
-            self.assert_(offset.onOffset(date) == expected)
+            self.assertEqual(offset.onOffset(date), expected)
 
-class TestLastWeekOfMonth(TestBase):
+class TestLastWeekOfMonth(Base):
     _offset = LastWeekOfMonth
 
     def test_constructor(self):
@@ -717,13 +1047,13 @@ class TestLastWeekOfMonth(TestBase):
         offset_sat = LastWeekOfMonth(n=1, weekday=5)
 
         one_day_before = (last_sat + timedelta(days=-1))
-        self.assert_(one_day_before + offset_sat == last_sat)
+        self.assertEqual(one_day_before + offset_sat, last_sat)
 
         one_day_after = (last_sat + timedelta(days=+1))
-        self.assert_(one_day_after + offset_sat == next_sat)
+        self.assertEqual(one_day_after + offset_sat, next_sat)
 
         #Test On that day
-        self.assert_(last_sat + offset_sat == next_sat)
+        self.assertEqual(last_sat + offset_sat, next_sat)
 
         #### Thursday
 
@@ -732,22 +1062,22 @@ class TestLastWeekOfMonth(TestBase):
         next_thurs = datetime(2013,2,28)
 
         one_day_before = last_thurs + timedelta(days=-1)
-        self.assert_(one_day_before + offset_thur == last_thurs)
+        self.assertEqual(one_day_before + offset_thur, last_thurs)
 
         one_day_after = last_thurs + timedelta(days=+1)
-        self.assert_(one_day_after + offset_thur == next_thurs)
+        self.assertEqual(one_day_after + offset_thur, next_thurs)
 
         # Test on that day
-        self.assert_(last_thurs + offset_thur == next_thurs)
+        self.assertEqual(last_thurs + offset_thur, next_thurs)
 
         three_before = last_thurs + timedelta(days=-3)
-        self.assert_(three_before + offset_thur == last_thurs)
+        self.assertEqual(three_before + offset_thur, last_thurs)
 
         two_after = last_thurs + timedelta(days=+2)
-        self.assert_(two_after + offset_thur == next_thurs)
+        self.assertEqual(two_after + offset_thur, next_thurs)
 
         offset_sunday = LastWeekOfMonth(n=1, weekday=WeekDay.SUN)
-        self.assert_(datetime(2013,7,31) + offset_sunday == datetime(2013,8,25))
+        self.assertEqual(datetime(2013,7,31) + offset_sunday, datetime(2013,8,25))
 
     def test_onOffset(self):
         test_cases = [
@@ -769,10 +1099,10 @@ class TestLastWeekOfMonth(TestBase):
 
         for weekday, date, expected in test_cases:
             offset = LastWeekOfMonth(weekday=weekday)
-            self.assert_(offset.onOffset(date) == expected, date)
+            self.assertEqual(offset.onOffset(date), expected, msg=date)
 
 
-class TestBMonthBegin(TestBase):
+class TestBMonthBegin(Base):
     _offset = BMonthBegin
 
     def test_offset(self):
@@ -834,7 +1164,7 @@ class TestBMonthBegin(TestBase):
         self.assertFalse(offset1 != offset2)
 
 
-class TestBMonthEnd(TestBase):
+class TestBMonthEnd(Base):
     _offset = BMonthEnd
 
     def test_offset(self):
@@ -897,7 +1227,7 @@ class TestBMonthEnd(TestBase):
         self.assertFalse(offset1 != offset2)
 
 
-class TestMonthBegin(TestBase):
+class TestMonthBegin(Base):
     _offset = MonthBegin
 
     def test_offset(self):
@@ -938,7 +1268,7 @@ class TestMonthBegin(TestBase):
                 assertEq(offset, base, expected)
 
 
-class TestMonthEnd(TestBase):
+class TestMonthEnd(Base):
     _offset = MonthEnd
 
     def test_offset(self):
@@ -1006,7 +1336,7 @@ class TestMonthEnd(TestBase):
             assertOnOffset(offset, date, expected)
 
 
-class TestBQuarterBegin(TestBase):
+class TestBQuarterBegin(Base):
     _offset = BQuarterBegin
 
     def test_repr(self):
@@ -1015,9 +1345,9 @@ class TestBQuarterBegin(TestBase):
         self.assertEqual(repr(BQuarterBegin(startingMonth=1)), "<BusinessQuarterBegin: startingMonth=1>")
 
     def test_isAnchored(self):
-        self.assert_(BQuarterBegin(startingMonth=1).isAnchored())
-        self.assert_(BQuarterBegin().isAnchored())
-        self.assert_(not BQuarterBegin(2, startingMonth=1).isAnchored())
+        self.assertTrue(BQuarterBegin(startingMonth=1).isAnchored())
+        self.assertTrue(BQuarterBegin().isAnchored())
+        self.assertFalse(BQuarterBegin(2, startingMonth=1).isAnchored())
 
     def test_offset(self):
         tests = []
@@ -1097,7 +1427,7 @@ class TestBQuarterBegin(TestBase):
         self.assertEqual(datetime(2007, 4, 3) + offset, datetime(2007, 4, 2))
 
 
-class TestBQuarterEnd(TestBase):
+class TestBQuarterEnd(Base):
     _offset = BQuarterEnd
 
     def test_repr(self):
@@ -1106,9 +1436,9 @@ class TestBQuarterEnd(TestBase):
         self.assertEqual(repr(BQuarterEnd(startingMonth=1)), "<BusinessQuarterEnd: startingMonth=1>")
 
     def test_isAnchored(self):
-        self.assert_(BQuarterEnd(startingMonth=1).isAnchored())
-        self.assert_(BQuarterEnd().isAnchored())
-        self.assert_(not BQuarterEnd(2, startingMonth=1).isAnchored())
+        self.assertTrue(BQuarterEnd(startingMonth=1).isAnchored())
+        self.assertTrue(BQuarterEnd().isAnchored())
+        self.assertFalse(BQuarterEnd(2, startingMonth=1).isAnchored())
 
     def test_offset(self):
         tests = []
@@ -1217,7 +1547,7 @@ def makeFY5253NearestEndMonth(*args, **kwds):
 def makeFY5253LastOfMonth(*args, **kwds):
     return FY5253(*args, variation="last", **kwds)
 
-class TestFY5253LastOfMonth(TestBase):
+class TestFY5253LastOfMonth(Base):
 
     def test_onOffset(self):
 
@@ -1291,7 +1621,7 @@ class TestFY5253LastOfMonth(TestBase):
                 current = current + offset
                 self.assertEqual(current, datum)
 
-class TestFY5253NearestEndMonth(TestBase):
+class TestFY5253NearestEndMonth(Base):
 
     def test_get_target_month_end(self):
         self.assertEqual(makeFY5253NearestEndMonth(startingMonth=8, weekday=WeekDay.SAT).get_target_month_end(datetime(2013,1,1)), datetime(2013,8,31))
@@ -1409,12 +1739,12 @@ class TestFY5253NearestEndMonth(TestBase):
                 current = current + offset
                 self.assertEqual(current, datum)
 
-class TestFY5253LastOfMonthQuarter(TestBase):
+class TestFY5253LastOfMonthQuarter(Base):
 
     def test_isAnchored(self):
-        self.assert_(makeFY5253LastOfMonthQuarter(startingMonth=1, weekday=WeekDay.SAT, qtr_with_extra_week=4).isAnchored())
-        self.assert_(makeFY5253LastOfMonthQuarter(weekday=WeekDay.SAT, startingMonth=3, qtr_with_extra_week=4).isAnchored())
-        self.assert_(not makeFY5253LastOfMonthQuarter(2, startingMonth=1, weekday=WeekDay.SAT, qtr_with_extra_week=4).isAnchored())
+        self.assertTrue(makeFY5253LastOfMonthQuarter(startingMonth=1, weekday=WeekDay.SAT, qtr_with_extra_week=4).isAnchored())
+        self.assertTrue(makeFY5253LastOfMonthQuarter(weekday=WeekDay.SAT, startingMonth=3, qtr_with_extra_week=4).isAnchored())
+        self.assertFalse(makeFY5253LastOfMonthQuarter(2, startingMonth=1, weekday=WeekDay.SAT, qtr_with_extra_week=4).isAnchored())
 
     def test_equality(self):
         self.assertEqual(makeFY5253LastOfMonthQuarter(startingMonth=1, weekday=WeekDay.SAT, qtr_with_extra_week=4), makeFY5253LastOfMonthQuarter(startingMonth=1, weekday=WeekDay.SAT, qtr_with_extra_week=4))
@@ -1551,7 +1881,7 @@ class TestFY5253LastOfMonthQuarter(TestBase):
         self.assertEqual(sat_dec_4.get_weeks(datetime(2011, 4, 2)), [13, 13, 13, 14])
         self.assertEqual(sat_dec_1.get_weeks(datetime(2010, 12, 25)), [13, 13, 13, 13])
 
-class TestFY5253NearestEndMonthQuarter(TestBase):
+class TestFY5253NearestEndMonthQuarter(Base):
 
     def test_onOffset(self):
 
@@ -1627,7 +1957,7 @@ class TestFY5253NearestEndMonthQuarter(TestBase):
 
         assertEq(offset2, datetime(2013,1,15), datetime(2013, 3, 30))
 
-class TestQuarterBegin(TestBase):
+class TestQuarterBegin(Base):
 
     def test_repr(self):
         self.assertEqual(repr(QuarterBegin()), "<QuarterBegin: startingMonth=3>")
@@ -1635,9 +1965,9 @@ class TestQuarterBegin(TestBase):
         self.assertEqual(repr(QuarterBegin(startingMonth=1)),"<QuarterBegin: startingMonth=1>")
 
     def test_isAnchored(self):
-        self.assert_(QuarterBegin(startingMonth=1).isAnchored())
-        self.assert_(QuarterBegin().isAnchored())
-        self.assert_(not QuarterBegin(2, startingMonth=1).isAnchored())
+        self.assertTrue(QuarterBegin(startingMonth=1).isAnchored())
+        self.assertTrue(QuarterBegin().isAnchored())
+        self.assertFalse(QuarterBegin(2, startingMonth=1).isAnchored())
 
     def test_offset(self):
         tests = []
@@ -1702,7 +2032,7 @@ class TestQuarterBegin(TestBase):
         self.assertEqual(datetime(2010, 2, 1) + offset, datetime(2010, 1, 1))
 
 
-class TestQuarterEnd(TestBase):
+class TestQuarterEnd(Base):
     _offset = QuarterEnd
 
     def test_repr(self):
@@ -1711,9 +2041,9 @@ class TestQuarterEnd(TestBase):
         self.assertEqual(repr(QuarterEnd(startingMonth=1)), "<QuarterEnd: startingMonth=1>")
 
     def test_isAnchored(self):
-        self.assert_(QuarterEnd(startingMonth=1).isAnchored())
-        self.assert_(QuarterEnd().isAnchored())
-        self.assert_(not QuarterEnd(2, startingMonth=1).isAnchored())
+        self.assertTrue(QuarterEnd(startingMonth=1).isAnchored())
+        self.assertTrue(QuarterEnd().isAnchored())
+        self.assertFalse(QuarterEnd(2, startingMonth=1).isAnchored())
 
     def test_offset(self):
         tests = []
@@ -1840,7 +2170,7 @@ class TestQuarterEnd(TestBase):
             assertOnOffset(offset, date, expected)
 
 
-class TestBYearBegin(TestBase):
+class TestBYearBegin(Base):
     _offset = BYearBegin
 
     def test_misspecified(self):
@@ -1888,7 +2218,7 @@ class TestBYearBegin(TestBase):
                 assertEq(offset, base, expected)
 
 
-class TestYearBegin(TestBase):
+class TestYearBegin(Base):
     _offset = YearBegin
 
     def test_misspecified(self):
@@ -1961,7 +2291,7 @@ class TestYearBegin(TestBase):
             assertOnOffset(offset, date, expected)
 
 
-class TestBYearEndLagged(TestBase):
+class TestBYearEndLagged(Base):
 
     def test_bad_month_fail(self):
         self.assertRaises(Exception, BYearEnd, month=13)
@@ -2002,7 +2332,7 @@ class TestBYearEndLagged(TestBase):
             assertOnOffset(offset, date, expected)
 
 
-class TestBYearEnd(TestBase):
+class TestBYearEnd(Base):
     _offset = BYearEnd
 
     def test_offset(self):
@@ -2051,7 +2381,7 @@ class TestBYearEnd(TestBase):
             assertOnOffset(offset, date, expected)
 
 
-class TestYearEnd(TestBase):
+class TestYearEnd(Base):
     _offset = YearEnd
 
     def test_misspecified(self):
@@ -2103,7 +2433,7 @@ class TestYearEnd(TestBase):
             assertOnOffset(offset, date, expected)
 
 
-class TestYearEndDiffMonth(TestBase):
+class TestYearEndDiffMonth(Base):
 
     def test_offset(self):
         tests = []
@@ -2155,14 +2485,30 @@ class TestYearEndDiffMonth(TestBase):
 def assertEq(offset, base, expected):
     actual = offset + base
     actual_swapped = base + offset
+    actual_apply = offset.apply(base)
     try:
         assert actual == expected
         assert actual_swapped == expected
+        assert actual_apply == expected
     except AssertionError:
         raise AssertionError("\nExpected: %s\nActual: %s\nFor Offset: %s)"
                              "\nAt Date: %s" %
                             (expected, actual, offset, base))
 
+def test_Easter():
+    assertEq(Easter(), datetime(2010, 1, 1), datetime(2010, 4, 4))
+    assertEq(Easter(), datetime(2010, 4, 5), datetime(2011, 4, 24))
+    assertEq(Easter(2), datetime(2010, 1, 1), datetime(2011, 4, 24))
+
+    assertEq(Easter(), datetime(2010, 4, 4), datetime(2011, 4, 24))
+    assertEq(Easter(2), datetime(2010, 4, 4), datetime(2012, 4, 8))
+
+    assertEq(-Easter(), datetime(2011, 1, 1), datetime(2010, 4, 4))
+    assertEq(-Easter(), datetime(2010, 4, 5), datetime(2010, 4, 4))
+    assertEq(-Easter(2), datetime(2011, 1, 1), datetime(2009, 4, 12))
+
+    assertEq(-Easter(), datetime(2010, 4, 4), datetime(2009, 4, 12))
+    assertEq(-Easter(2), datetime(2010, 4, 4), datetime(2008, 3, 23))
 
 def test_Hour():
     assertEq(Hour(), datetime(2010, 1, 1), datetime(2010, 1, 1, 1))
@@ -2423,25 +2769,9 @@ def get_all_subclasses(cls):
     return ret
 
 class TestCaching(tm.TestCase):
-    no_simple_ctr = [WeekOfMonth, FY5253,
-                     FY5253Quarter,
-                     LastWeekOfMonth]
 
-    def test_should_cache_month_end(self):
-        self.assertTrue(MonthEnd()._should_cache())
-
-    def test_should_cache_bmonth_end(self):
-        self.assertTrue(BusinessMonthEnd()._should_cache())
-
-    def test_should_cache_week_month(self):
-        self.assertTrue(WeekOfMonth(weekday=1, week=2)._should_cache())
-
-    def test_all_cacheableoffsets(self):
-        for subclass in get_all_subclasses(CacheableOffset):
-            if subclass.__name__[0] == "_" \
-                or subclass in TestCaching.no_simple_ctr:
-                continue
-            self.run_X_index_creation(subclass)
+    # as of GH 6479 (in 0.14.0), offset caching is turned off
+    # as of v0.12.0 only BusinessMonth/Quarter were actually caching
 
     def setUp(self):
         _daterange_cache.clear()
@@ -2458,20 +2788,35 @@ class TestCaching(tm.TestCase):
         DatetimeIndex(start=datetime(2013,1,31), end=datetime(2013,3,31), freq=inst1, normalize=True)
         self.assertTrue(cls() in _daterange_cache, cls)
 
+    def test_should_cache_month_end(self):
+        self.assertFalse(MonthEnd()._should_cache())
+
+    def test_should_cache_bmonth_end(self):
+        self.assertFalse(BusinessMonthEnd()._should_cache())
+
+    def test_should_cache_week_month(self):
+        self.assertFalse(WeekOfMonth(weekday=1, week=2)._should_cache())
+
+    def test_all_cacheableoffsets(self):
+        for subclass in get_all_subclasses(CacheableOffset):
+            if subclass.__name__[0] == "_" \
+                or subclass in TestCaching.no_simple_ctr:
+                continue
+            self.run_X_index_creation(subclass)
+
     def test_month_end_index_creation(self):
         DatetimeIndex(start=datetime(2013,1,31), end=datetime(2013,3,31), freq=MonthEnd(), normalize=True)
-        self.assertTrue(MonthEnd() in _daterange_cache)
+        self.assertFalse(MonthEnd() in _daterange_cache)
 
     def test_bmonth_end_index_creation(self):
         DatetimeIndex(start=datetime(2013,1,31), end=datetime(2013,3,29), freq=BusinessMonthEnd(), normalize=True)
-        self.assertTrue(BusinessMonthEnd() in _daterange_cache)
+        self.assertFalse(BusinessMonthEnd() in _daterange_cache)
 
     def test_week_of_month_index_creation(self):
         inst1 = WeekOfMonth(weekday=1, week=2)
         DatetimeIndex(start=datetime(2013,1,31), end=datetime(2013,3,29), freq=inst1, normalize=True)
         inst2 = WeekOfMonth(weekday=1, week=2)
-        self.assertTrue(inst2 in _daterange_cache)
-
+        self.assertFalse(inst2 in _daterange_cache)
 
 class TestReprNames(tm.TestCase):
     def test_str_for_named_is_name(self):

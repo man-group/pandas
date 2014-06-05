@@ -98,30 +98,33 @@ def _get_skiprows(skiprows):
                     type(skiprows).__name__)
 
 
-def _read(io):
+def _read(obj):
     """Try to read from a url, file or string.
 
     Parameters
     ----------
-    io : str, unicode, or file-like
+    obj : str, unicode, or file-like
 
     Returns
     -------
     raw_text : str
     """
-    if _is_url(io):
-        with urlopen(io) as url:
-            raw_text = url.read()
-    elif hasattr(io, 'read'):
-        raw_text = io.read()
-    elif os.path.isfile(io):
-        with open(io) as f:
-            raw_text = f.read()
-    elif isinstance(io, string_types):
-        raw_text = io
+    if _is_url(obj):
+        with urlopen(obj) as url:
+            text = url.read()
+    elif hasattr(obj, 'read'):
+        text = obj.read()
+    elif isinstance(obj, string_types):
+        text = obj
+        try:
+            if os.path.isfile(text):
+                with open(text, 'rb') as f:
+                    return f.read()
+        except TypeError:
+            pass
     else:
-        raise TypeError("Cannot read object of type %r" % type(io).__name__)
-    return raw_text
+        raise TypeError("Cannot read object of type %r" % type(obj).__name__)
+    return text
 
 
 class _HtmlFrameParser(object):
@@ -165,10 +168,11 @@ class _HtmlFrameParser(object):
     See each method's respective documentation for details on their
     functionality.
     """
-    def __init__(self, io, match, attrs):
+    def __init__(self, io, match, attrs, encoding):
         self.io = io
         self.match = match
         self.attrs = attrs
+        self.encoding = encoding
 
     def parse_tables(self):
         tables = self._parse_tables(self._build_doc(), self.match, self.attrs)
@@ -422,7 +426,8 @@ class _BeautifulSoupHtml5LibFrameParser(_HtmlFrameParser):
 
     def _build_doc(self):
         from bs4 import BeautifulSoup
-        return BeautifulSoup(self._setup_build_doc(), features='html5lib')
+        return BeautifulSoup(self._setup_build_doc(), features='html5lib',
+                             from_encoding=self.encoding)
 
 
 def _build_xpath_expr(attrs):
@@ -519,7 +524,7 @@ class _LxmlFrameParser(_HtmlFrameParser):
         from lxml.html import parse, fromstring, HTMLParser
         from lxml.etree import XMLSyntaxError
 
-        parser = HTMLParser(recover=False)
+        parser = HTMLParser(recover=False, encoding=self.encoding)
 
         try:
             # try to parse the input in the simplest way
@@ -579,8 +584,9 @@ def _expand_elements(body):
     lens_max = lens.max()
     not_max = lens[lens != lens_max]
 
+    empty = ['']
     for ind, length in iteritems(not_max):
-        body[ind] += [np.nan] * (lens_max - length)
+        body[ind] += empty * (lens_max - length)
 
 
 def _data_to_frame(data, header, index_col, skiprows, infer_types,
@@ -688,7 +694,7 @@ def _validate_flavor(flavor):
 
 
 def _parse(flavor, io, match, header, index_col, skiprows, infer_types,
-           parse_dates, tupleize_cols, thousands, attrs):
+           parse_dates, tupleize_cols, thousands, attrs, encoding):
     flavor = _validate_flavor(flavor)
     compiled_match = re.compile(match)  # you can pass a compiled regex here
 
@@ -696,7 +702,7 @@ def _parse(flavor, io, match, header, index_col, skiprows, infer_types,
     retained = None
     for flav in flavor:
         parser = _parser_dispatch(flav)
-        p = parser(io, compiled_match, attrs)
+        p = parser(io, compiled_match, attrs, encoding)
 
         try:
             tables = p.parse_tables()
@@ -714,7 +720,7 @@ def _parse(flavor, io, match, header, index_col, skiprows, infer_types,
 
 def read_html(io, match='.+', flavor=None, header=None, index_col=None,
               skiprows=None, infer_types=None, attrs=None, parse_dates=False,
-              tupleize_cols=False, thousands=','):
+              tupleize_cols=False, thousands=',', encoding=None):
     r"""Read HTML tables into a ``list`` of ``DataFrame`` objects.
 
     Parameters
@@ -759,19 +765,15 @@ def read_html(io, match='.+', flavor=None, header=None, index_col=None,
         This is a dictionary of attributes that you can pass to use to identify
         the table in the HTML. These are not checked for validity before being
         passed to lxml or Beautiful Soup. However, these attributes must be
-        valid HTML table attributes to work correctly. For example,
+        valid HTML table attributes to work correctly. For example, ::
 
-        .. code-block:: python
-
-           attrs = {'id': 'table'}
+            attrs = {'id': 'table'}
 
         is a valid attribute dictionary because the 'id' HTML tag attribute is
         a valid HTML attribute for *any* HTML tag as per `this document
-        <http://www.w3.org/TR/html-markup/global-attributes.html>`__.
+        <http://www.w3.org/TR/html-markup/global-attributes.html>`__. ::
 
-        .. code-block:: python
-
-           attrs = {'asdf': 'table'}
+            attrs = {'asdf': 'table'}
 
         is *not* a valid attribute dictionary because 'asdf' is not a valid
         HTML attribute even if it is a valid XML attribute.  Valid HTML 4.01
@@ -794,6 +796,12 @@ def read_html(io, match='.+', flavor=None, header=None, index_col=None,
 
     thousands : str, optional
         Separator to use to parse thousands. Defaults to ``','``.
+
+    encoding : str or None, optional
+        The encoding used to decode the web page. Defaults to ``None``.``None``
+        preserves the previous encoding behavior, which depends on the
+        underlying parser library (e.g., the parser library will try to use
+        the encoding provided by the document).
 
     Returns
     -------
@@ -840,4 +848,4 @@ def read_html(io, match='.+', flavor=None, header=None, index_col=None,
         raise ValueError('cannot skip rows starting from the end of the '
                          'data (you passed a negative value)')
     return _parse(flavor, io, match, header, index_col, skiprows, infer_types,
-                  parse_dates, tupleize_cols, thousands, attrs)
+                  parse_dates, tupleize_cols, thousands, attrs, encoding)

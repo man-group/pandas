@@ -186,6 +186,21 @@ df = DataFrame(randn(5, 4))
 concat_small_frames = Benchmark('concat([df] * 1000)', setup,
                                 start_date=datetime(2012, 1, 1))
 
+
+#----------------------------------------------------------------------
+# Concat empty
+
+setup = common_setup + """
+df = DataFrame(dict(A = range(10000)),index=date_range('20130101',periods=10000,freq='s'))
+empty = DataFrame()
+"""
+
+concat_empty_frames1 = Benchmark('concat([df,empty])', setup,
+                                start_date=datetime(2012, 1, 1))
+concat_empty_frames2 = Benchmark('concat([empty,df])', setup,
+                                start_date=datetime(2012, 1, 1))
+
+
 #----------------------------------------------------------------------
 # Ordered merge
 
@@ -202,3 +217,23 @@ right = DataFrame({'key' : np.arange(10000),
 """
 
 stmt = "ordered_merge(left, right, on='key', left_by='group')"
+
+#----------------------------------------------------------------------
+# outer join of non-unique
+# GH 6329
+
+setup = common_setup + """
+date_index = date_range('01-Jan-2013', '23-Jan-2013', freq='T')
+daily_dates = date_index.to_period('D').to_timestamp('S','S')
+fracofday = date_index.view(np.ndarray) - daily_dates.view(np.ndarray)
+fracofday = fracofday.astype('timedelta64[ns]').astype(np.float64)/864e11
+fracofday = TimeSeries(fracofday, daily_dates)
+index = date_range(date_index.min().to_period('A').to_timestamp('D','S'),
+                      date_index.max().to_period('A').to_timestamp('D','E'),
+                      freq='D')
+temp = TimeSeries(1.0, index)
+"""
+
+join_non_unique_equal = Benchmark('fracofday * temp[fracofday.index]', setup,
+                                   start_date=datetime(2013, 1, 1))
+

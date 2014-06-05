@@ -2,6 +2,7 @@ from __future__ import print_function
 # pylint: disable-msg=W0612,E1101
 
 import nose
+import re
 
 from numpy.random import randn
 
@@ -90,7 +91,7 @@ class TestExpressions(tm.TestCase):
                         assert expected.dtype.kind == 'f'
                 assert_func(expected, result)
             except Exception:
-                print("Failed test with operator %r" % op.__name__)
+                com.pprint_thing("Failed test with operator %r" % op.__name__)
                 raise
 
     def test_integer_arithmetic(self):
@@ -130,8 +131,8 @@ class TestExpressions(tm.TestCase):
                     assert not used_numexpr, "Used numexpr unexpectedly."
                 assert_func(expected, result)
             except Exception:
-                print("Failed test with operation %r" % arith)
-                print("test_flex was %r" % test_flex)
+                com.pprint_thing("Failed test with operation %r" % arith)
+                com.pprint_thing("test_flex was %r" % test_flex)
                 raise
 
     def run_frame(self, df, other, binary_comp=None, run_binary=True,
@@ -238,19 +239,19 @@ class TestExpressions(tm.TestCase):
 
         # no op
         result   = expr._can_use_numexpr(operator.add, None, self.frame, self.frame, 'evaluate')
-        self.assert_(result == False)
+        self.assertFalse(result)
 
         # mixed
         result   = expr._can_use_numexpr(operator.add, '+', self.mixed, self.frame, 'evaluate')
-        self.assert_(result == False)
+        self.assertFalse(result)
 
         # min elements
         result   = expr._can_use_numexpr(operator.add, '+', self.frame2, self.frame2, 'evaluate')
-        self.assert_(result == False)
+        self.assertFalse(result)
 
         # ok, we only check on first part of expression
         result   = expr._can_use_numexpr(operator.add, '+', self.frame, self.frame2, 'evaluate')
-        self.assert_(result == True)
+        self.assertTrue(result)
 
     def test_binary_ops(self):
 
@@ -265,14 +266,14 @@ class TestExpressions(tm.TestCase):
                         op = getattr(operator, op, None)
                     if op is not None:
                         result   = expr._can_use_numexpr(op, op_str, f, f, 'evaluate')
-                        self.assert_(result == (not f._is_mixed_type))
+                        self.assertNotEqual(result, f._is_mixed_type)
 
                         result   = expr.evaluate(op, op_str, f, f, use_numexpr=True)
                         expected = expr.evaluate(op, op_str, f, f, use_numexpr=False)
                         assert_array_equal(result,expected.values)
 
                         result   = expr._can_use_numexpr(op, op_str, f2, f2, 'evaluate')
-                        self.assert_(result == False)
+                        self.assertFalse(result)
 
 
         expr.set_use_numexpr(False)
@@ -300,14 +301,14 @@ class TestExpressions(tm.TestCase):
                     op = getattr(operator,op)
 
                     result   = expr._can_use_numexpr(op, op_str, f11, f12, 'evaluate')
-                    self.assert_(result == (not f11._is_mixed_type))
+                    self.assertNotEqual(result, f11._is_mixed_type)
 
                     result   = expr.evaluate(op, op_str, f11, f12, use_numexpr=True)
                     expected = expr.evaluate(op, op_str, f11, f12, use_numexpr=False)
                     assert_array_equal(result,expected.values)
 
                     result   = expr._can_use_numexpr(op, op_str, f21, f22, 'evaluate')
-                    self.assert_(result == False)
+                    self.assertFalse(result)
 
         expr.set_use_numexpr(False)
         testit()
@@ -338,6 +339,79 @@ class TestExpressions(tm.TestCase):
         testit()
         expr.set_numexpr_threads()
         testit()
+
+    def test_bool_ops_raise_on_arithmetic(self):
+        df = DataFrame({'a': np.random.rand(10) > 0.5,
+                        'b': np.random.rand(10) > 0.5})
+        names = 'div', 'truediv', 'floordiv', 'pow'
+        ops = '/', '/', '//', '**'
+        msg = 'operator %r not implemented for bool dtypes'
+        for op, name in zip(ops, names):
+            if not compat.PY3 or name != 'div':
+                f = getattr(operator, name)
+                err_msg = re.escape(msg % op)
+
+                with tm.assertRaisesRegexp(NotImplementedError, err_msg):
+                    f(df, df)
+
+                with tm.assertRaisesRegexp(NotImplementedError, err_msg):
+                    f(df.a, df.b)
+
+                with tm.assertRaisesRegexp(NotImplementedError, err_msg):
+                    f(df.a, True)
+
+                with tm.assertRaisesRegexp(NotImplementedError, err_msg):
+                    f(False, df.a)
+
+                with tm.assertRaisesRegexp(TypeError, err_msg):
+                    f(False, df)
+
+                with tm.assertRaisesRegexp(TypeError, err_msg):
+                    f(df, True)
+
+    def test_bool_ops_warn_on_arithmetic(self):
+        n = 10
+        df = DataFrame({'a': np.random.rand(n) > 0.5,
+                        'b': np.random.rand(n) > 0.5})
+        names = 'add', 'mul', 'sub'
+        ops = '+', '*', '-'
+        subs = {'+': '|', '*': '&', '-': '^'}
+        sub_funcs = {'|': 'or_', '&': 'and_', '^': 'xor'}
+        for op, name in zip(ops, names):
+            f = getattr(operator, name)
+            fe = getattr(operator, sub_funcs[subs[op]])
+
+            with tm.use_numexpr(True, min_elements=5):
+                with tm.assert_produces_warning():
+                    r = f(df, df)
+                    e = fe(df, df)
+                    tm.assert_frame_equal(r, e)
+
+                with tm.assert_produces_warning():
+                    r = f(df.a, df.b)
+                    e = fe(df.a, df.b)
+                    tm.assert_series_equal(r, e)
+
+                with tm.assert_produces_warning():
+                    r = f(df.a, True)
+                    e = fe(df.a, True)
+                    tm.assert_series_equal(r, e)
+
+                with tm.assert_produces_warning():
+                    r = f(False, df.a)
+                    e = fe(False, df.a)
+                    tm.assert_series_equal(r, e)
+
+                with tm.assert_produces_warning():
+                    r = f(False, df)
+                    e = fe(False, df)
+                    tm.assert_frame_equal(r, e)
+
+                with tm.assert_produces_warning():
+                    r = f(df, True)
+                    e = fe(df, True)
+                    tm.assert_frame_equal(r, e)
+
 
 if __name__ == '__main__':
     import nose

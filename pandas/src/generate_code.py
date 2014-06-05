@@ -1,6 +1,8 @@
 from __future__ import print_function
-from pandas.compat import range, cStringIO as StringIO
-import os
+# we only need to be able to run this file on 2.7
+# don't introduce a pandas/pandas.compat import
+# or we get a bootstrapping problem
+from StringIO import StringIO
 
 header = """
 cimport numpy as np
@@ -31,7 +33,9 @@ from khash cimport *
 ctypedef unsigned char UChar
 
 cimport util
-from util cimport is_array, _checknull, _checknan
+from util cimport is_array, _checknull, _checknan, get_nat
+
+cdef int64_t iNaT = get_nat()
 
 # import datetime C API
 PyDateTime_IMPORT
@@ -77,9 +81,9 @@ def take_1d_%(name)s_%(dest)s(ndarray[%(c_type_in)s] values,
 
 take_2d_axis0_template = """@cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis0_%(name)s_%(dest)s(ndarray[%(c_type_in)s, ndim=2] values,
+def take_2d_axis0_%(name)s_%(dest)s(%(c_type_in)s[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[%(c_type_out)s, ndim=2] out,
+                                    %(c_type_out)s[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -92,7 +96,8 @@ def take_2d_axis0_%(name)s_%(dest)s(ndarray[%(c_type_in)s, ndim=2] values,
 
     IF %(can_copy)s:
         cdef:
-            %(c_type_out)s *v, *o
+            %(c_type_out)s *v
+            %(c_type_out)s *o
 
         #GH3130
         if (values.strides[1] == out.strides[1] and
@@ -123,9 +128,9 @@ def take_2d_axis0_%(name)s_%(dest)s(ndarray[%(c_type_in)s, ndim=2] values,
 
 take_2d_axis1_template = """@cython.wraparound(False)
 @cython.boundscheck(False)
-def take_2d_axis1_%(name)s_%(dest)s(ndarray[%(c_type_in)s, ndim=2] values,
+def take_2d_axis1_%(name)s_%(dest)s(%(c_type_in)s[:, :] values,
                                     ndarray[int64_t] indexer,
-                                    ndarray[%(c_type_out)s, ndim=2] out,
+                                    %(c_type_out)s[:, :] out,
                                     fill_value=np.nan):
     cdef:
         Py_ssize_t i, j, k, n, idx
@@ -139,33 +144,12 @@ def take_2d_axis1_%(name)s_%(dest)s(ndarray[%(c_type_in)s, ndim=2] values,
 
     fv = fill_value
 
-    IF %(can_copy)s:
-        cdef:
-            %(c_type_out)s *v, *o
-
-        #GH3130
-        if (values.strides[0] == out.strides[0] and
-            values.strides[0] == sizeof(%(c_type_out)s) and
-            sizeof(%(c_type_out)s) * n >= 256):
-
-            for j from 0 <= j < k:
-                idx = indexer[j]
-                if idx == -1:
-                    for i from 0 <= i < n:
-                        out[i, j] = fv
-                else:
-                    v = &values[0, idx]
-                    o = &out[0, j]
-                    memmove(o, v, <size_t>(sizeof(%(c_type_out)s) * n))
-            return
-
-    for j from 0 <= j < k:
-        idx = indexer[j]
-        if idx == -1:
-            for i from 0 <= i < n:
+    for i from 0 <= i < n:
+        for j from 0 <= j < k:
+            idx = indexer[j]
+            if idx == -1:
                 out[i, j] = fv
-        else:
-            for i from 0 <= i < n:
+            else:
                 out[i, j] = %(preval)svalues[i, idx]%(postval)s
 
 """
@@ -1167,6 +1151,79 @@ def group_var_bin_%(name)s(ndarray[%(dest_type2)s, ndim=2] out,
                              (ct * ct - ct))
 """
 
+group_count_template = """@cython.boundscheck(False)
+@cython.wraparound(False)
+def group_count_%(name)s(ndarray[%(dest_type2)s, ndim=2] out,
+                         ndarray[int64_t] counts,
+                         ndarray[%(c_type)s, ndim=2] values,
+                         ndarray[int64_t] labels):
+    '''
+    Only aggregates on axis=0
+    '''
+    cdef:
+        Py_ssize_t i, j, lab
+        Py_ssize_t N = values.shape[0], K = values.shape[1]
+        %(c_type)s val
+        ndarray[int64_t, ndim=2] nobs = np.zeros((out.shape[0], out.shape[1]),
+                                                 dtype=np.int64)
+
+    if len(values) != len(labels):
+       raise AssertionError("len(index) != len(labels)")
+
+    for i in range(N):
+        lab = labels[i]
+        if lab < 0:
+            continue
+
+        counts[lab] += 1
+        for j in range(K):
+            val = values[i, j]
+
+            # not nan
+            nobs[lab, j] += val == val and val != iNaT
+
+    for i in range(len(counts)):
+        for j in range(K):
+            out[i, j] = nobs[i, j]
+
+
+"""
+
+group_count_bin_template = """@cython.boundscheck(False)
+@cython.wraparound(False)
+def group_count_bin_%(name)s(ndarray[%(dest_type2)s, ndim=2] out,
+                             ndarray[int64_t] counts,
+                             ndarray[%(c_type)s, ndim=2] values,
+                             ndarray[int64_t] bins):
+    '''
+    Only aggregates on axis=0
+    '''
+    cdef:
+        Py_ssize_t i, j, ngroups
+        Py_ssize_t N = values.shape[0], K = values.shape[1], b = 0
+        %(c_type)s val
+        ndarray[int64_t, ndim=2] nobs = np.zeros((out.shape[0], out.shape[1]),
+                                                 dtype=np.int64)
+
+    ngroups = len(bins) + (bins[len(bins) - 1] != N)
+
+    for i in range(N):
+        while b < ngroups - 1 and i >= bins[b]:
+            b += 1
+
+        counts[b] += 1
+        for j in range(K):
+            val = values[i, j]
+
+            # not nan
+            nobs[b, j] += val == val and val != iNaT
+
+    for i in range(ngroups):
+        for j in range(K):
+            out[i, j] = nobs[i, j]
+
+
+"""
 # add passing bin edges, instead of labels
 
 
@@ -2162,30 +2219,39 @@ def put2d_%(name)s_%(dest_type)s(ndarray[%(c_type)s, ndim=2, cast=True] values,
 #-------------------------------------------------------------------------
 # Generators
 
-def generate_put_template(template, use_ints = True, use_floats = True):
+def generate_put_template(template, use_ints=True, use_floats=True,
+                          use_objects=False, use_datelikes=False):
     floats_list = [
         ('float64', 'float64_t', 'float64_t', 'np.float64'),
         ('float32', 'float32_t', 'float32_t', 'np.float32'),
-        ]
+    ]
     ints_list = [
         ('int8',  'int8_t',  'float32_t', 'np.float32'),
         ('int16', 'int16_t', 'float32_t', 'np.float32'),
         ('int32', 'int32_t', 'float64_t', 'np.float64'),
         ('int64', 'int64_t', 'float64_t', 'np.float64'),
-        ]
+    ]
+    date_like_list = [
+        ('int64', 'int64_t', 'float64_t', 'np.float64'),
+    ]
+    object_list = [('object', 'object', 'float64_t', 'np.float64')]
     function_list = []
     if use_floats:
         function_list.extend(floats_list)
     if use_ints:
         function_list.extend(ints_list)
+    if use_objects:
+        function_list.extend(object_list)
+    if use_datelikes:
+        function_list.extend(date_like_list)
 
     output = StringIO()
     for name, c_type, dest_type, dest_dtype in function_list:
-        func = template % {'name' : name,
-                           'c_type' : c_type,
-                           'dest_type' : dest_type.replace('_t', ''),
-                           'dest_type2' : dest_type,
-                           'dest_dtype' : dest_dtype}
+        func = template % {'name': name,
+                           'c_type': c_type,
+                           'dest_type': dest_type.replace('_t', ''),
+                           'dest_type2': dest_type,
+                           'dest_dtype': dest_dtype}
         output.write(func)
     return output.getvalue()
 
@@ -2268,6 +2334,8 @@ groupbys = [group_last_template,
             group_max_bin_template,
             group_ohlc_template]
 
+groupby_count = [group_count_template, group_count_bin_template]
+
 templates_1d = [map_indices_template,
                 pad_template,
                 backfill_template,
@@ -2289,6 +2357,7 @@ take_templates = [take_1d_template,
                   take_2d_axis1_template,
                   take_2d_multi_template]
 
+
 def generate_take_cython_file(path='generated.pyx'):
     with open(path, 'w') as f:
         print(header, file=f)
@@ -2305,7 +2374,12 @@ def generate_take_cython_file(path='generated.pyx'):
             print(generate_put_template(template), file=f)
 
         for template in groupbys:
-            print(generate_put_template(template, use_ints = False), file=f)
+            print(generate_put_template(template, use_ints=False), file=f)
+
+        for template in groupby_count:
+            print(generate_put_template(template, use_ints=False,
+                                        use_datelikes=True, use_objects=True),
+                  file=f)
 
         # for template in templates_1d_datetime:
         #     print >> f, generate_from_template_datetime(template)
@@ -2315,6 +2389,7 @@ def generate_take_cython_file(path='generated.pyx'):
 
         for template in nobool_1d_templates:
             print(generate_from_template(template, exclude=['bool']), file=f)
+
 
 if __name__ == '__main__':
     generate_take_cython_file()

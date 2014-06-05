@@ -355,6 +355,8 @@ cdef class Int64Engine(IndexEngine):
         hash(val)
         if util.is_bool_object(val):
             raise KeyError(val)
+        elif util.is_float_object(val):
+            raise KeyError(val)
 
     cdef _maybe_get_bool_indexer(self, object val):
         cdef:
@@ -395,6 +397,38 @@ cdef class Float64Engine(IndexEngine):
 
     cdef _make_hash_table(self, n):
         return _hash.Float64HashTable(n)
+
+    cdef _get_index_values(self):
+        return algos.ensure_float64(self.vgetter())
+
+    cdef _maybe_get_bool_indexer(self, object val):
+        cdef:
+            ndarray[uint8_t] indexer
+            ndarray[float64_t] values
+            int count = 0
+            Py_ssize_t i, n
+            int last_true
+
+        values = self._get_index_values()
+        n = len(values)
+
+        result = np.empty(n, dtype=bool)
+        indexer = result.view(np.uint8)
+
+        for i in range(n):
+            if values[i] == val:
+                count += 1
+                indexer[i] = 1
+                last_true = i
+            else:
+                indexer[i] = 0
+
+        if count == 0:
+            raise KeyError(val)
+        if count == 1:
+            return last_true
+
+        return result
 
     def _call_monotonic(self, values):
         return algos.is_monotonic_float64(values)
@@ -571,11 +605,11 @@ cdef inline _to_i8(object val):
             return get_datetime64_value(val)
         elif PyDateTime_Check(val):
             tzinfo = getattr(val, 'tzinfo', None)
-            val = _pydatetime_to_dts(val, &dts)
+            ival = _pydatetime_to_dts(val, &dts)  # Save the original date value so we can get the utcoffset from it.
             if tzinfo is not None and not _is_utc(tzinfo):
                 offset = tslib._get_utcoffset(tzinfo, val)
-                val -= tslib._delta_to_nanoseconds(offset)
-
+                ival -= tslib._delta_to_nanoseconds(offset)
+            return ival
         return val
 
 cdef inline bint _is_utc(object tz):
