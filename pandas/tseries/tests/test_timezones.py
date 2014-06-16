@@ -805,6 +805,16 @@ class TestTimeZoneSupportDateutil(TestTimeZoneSupportPytz):
         self.assertEqual(ts, ts.tz_convert(dateutil.tz.tzutc()))
 
 
+class TestTimeZoneCacheKey(tm.TestCase):
+    def test_cache_keys_are_distinct(self):
+        tzs = pytz.common_timezones
+        for tz_name in tzs:
+            tz_p = tslib.maybe_get_tz(tz_name)
+            tz_d = tslib.maybe_get_tz('dateutil/' + tz_name)
+
+            self.assertNotEqual(tslib._p_tz_cache_key(tz_p), _p_tz_cache_key(tz_d))
+
+
 class TestTimeZones(tm.TestCase):
     _multiprocess_can_split_ = True
 
