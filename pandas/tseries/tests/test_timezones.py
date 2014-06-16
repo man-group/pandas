@@ -806,13 +806,13 @@ class TestTimeZoneSupportDateutil(TestTimeZoneSupportPytz):
 
 
 class TestTimeZoneCacheKey(tm.TestCase):
-    def test_cache_keys_are_distinct(self):
+    def test_cache_keys_are_distinct_for_pytz_vs_dateutil(self):
         tzs = pytz.common_timezones
         for tz_name in tzs:
             tz_p = tslib.maybe_get_tz(tz_name)
             tz_d = tslib.maybe_get_tz('dateutil/' + tz_name)
 
-            self.assertNotEqual(tslib._p_tz_cache_key(tz_p), _p_tz_cache_key(tz_d))
+            self.assertNotEqual(tslib._p_tz_cache_key(tz_p), tslib._p_tz_cache_key(tz_d))
 
 
 class TestTimeZones(tm.TestCase):
