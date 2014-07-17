@@ -2,7 +2,7 @@ from datetime import datetime
 from pandas.compat import range
 import pickle
 import nose
-
+import sys
 import numpy as np
 
 from pandas.core.index import Index
@@ -11,29 +11,15 @@ from pandas.tseries.index import DatetimeIndex
 from pandas import Timestamp
 from pandas.tseries.offsets import generate_range
 from pandas.tseries.index import cdate_range, bdate_range, date_range
-import pandas.tseries.tools as tools
 
 import pandas.core.datetools as datetools
 from pandas.util.testing import assertRaisesRegexp
 import pandas.util.testing as tm
 
 
-def _skip_if_no_pytz():
-    try:
-        import pytz
-    except ImportError:
-        raise nose.SkipTest("pytz not installed")
-
-def _skip_if_no_dateutil():
-    try:
-        import dateutil
-    except ImportError:
-        raise nose.SkipTest("dateutil not installed")
-
-
-def _skip_if_no_cday():
-    if datetools.cday is None:
-        raise nose.SkipTest("CustomBusinessDay not available.")
+def _skip_if_windows_python_3():
+    if sys.version_info > (3,) and sys.platform == 'win32':
+        raise nose.SkipTest("not used on python 3/win32")
 
 
 def eq_gen_range(kwargs, expected):
@@ -51,7 +37,7 @@ class TestGenRangeGeneration(tm.TestCase):
         self.assert_numpy_array_equal(rng1, rng2)
 
     def test_generate_cday(self):
-        _skip_if_no_cday()
+        tm._skip_if_no_cday()
         rng1 = list(generate_range(START, END, offset=datetools.cday))
         rng2 = list(generate_range(START, END, time_rule='C'))
         self.assert_numpy_array_equal(rng1, rng2)
@@ -293,14 +279,14 @@ class TestDateRange(tm.TestCase):
         self.rng[2:2].summary()
 
     def test_summary_pytz(self):
-        _skip_if_no_pytz()
+        tm._skip_if_no_pytz()
         import pytz
         bdate_range('1/1/2005', '1/1/2009', tz=pytz.utc).summary()
 
     def test_summary_dateutil(self):
-        _skip_if_no_dateutil()
+        tm._skip_if_no_dateutil()
         import dateutil
-        bdate_range('1/1/2005', '1/1/2009', tz=dateutil.tz.gettz('UTC')).summary()
+        bdate_range('1/1/2005', '1/1/2009', tz=dateutil.tz.tzutc()).summary()
 
     def test_misc(self):
         end = datetime(2009, 5, 13)
@@ -367,7 +353,7 @@ class TestDateRange(tm.TestCase):
 
     def test_range_tz_pytz(self):
         # GH 2906
-        _skip_if_no_pytz()
+        tm._skip_if_no_pytz()
         from pytz import timezone as tz
 
         start = datetime(2011, 1, 1, tzinfo=tz('US/Eastern'))
@@ -390,8 +376,10 @@ class TestDateRange(tm.TestCase):
 
     def test_range_tz_dateutil(self):
         # GH 2906
-        _skip_if_no_dateutil()
-        from dateutil.tz import gettz as tz
+        tm._skip_if_no_dateutil()
+        # Use maybe_get_tz to fix filename in tz under dateutil.
+        from pandas.tslib import maybe_get_tz
+        tz = lambda x: maybe_get_tz('dateutil/' + x)
 
         start = datetime(2011, 1, 1, tzinfo=tz('US/Eastern'))
         end = datetime(2011, 1, 3, tzinfo=tz('US/Eastern'))
@@ -412,7 +400,7 @@ class TestDateRange(tm.TestCase):
         self.assert_(dr[2] == end)
 
     def test_month_range_union_tz_pytz(self):
-        _skip_if_no_pytz()
+        tm._skip_if_no_pytz()
         from pytz import timezone
         tz = timezone('US/Eastern')
 
@@ -428,7 +416,8 @@ class TestDateRange(tm.TestCase):
         early_dr.union(late_dr)
 
     def test_month_range_union_tz_dateutil(self):
-        _skip_if_no_dateutil()
+        _skip_if_windows_python_3()
+        tm._skip_if_no_dateutil()
         from dateutil.tz import gettz as timezone
         tz = timezone('US/Eastern')
 
@@ -462,7 +451,7 @@ class TestDateRange(tm.TestCase):
 class TestCustomDateRange(tm.TestCase):
 
     def setUp(self):
-        _skip_if_no_cday()
+        tm._skip_if_no_cday()
         self.rng = cdate_range(START, END)
 
     def test_constructor(self):
@@ -626,14 +615,14 @@ class TestCustomDateRange(tm.TestCase):
         self.rng[2:2].summary()
 
     def test_summary_pytz(self):
-        _skip_if_no_pytz()
+        tm._skip_if_no_pytz()
         import pytz
         cdate_range('1/1/2005', '1/1/2009', tz=pytz.utc).summary()
 
     def test_summary_dateutil(self):
-        _skip_if_no_dateutil()
+        tm._skip_if_no_dateutil()
         import dateutil
-        cdate_range('1/1/2005', '1/1/2009', tz=dateutil.tz.gettz('UTC')).summary()
+        cdate_range('1/1/2005', '1/1/2009', tz=dateutil.tz.tzutc()).summary()
 
     def test_misc(self):
         end = datetime(2009, 5, 13)

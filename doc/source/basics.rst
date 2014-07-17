@@ -428,6 +428,7 @@ optional ``level`` parameter which applies only if the object has a
     ``prod``, Product of values
     ``std``, Unbiased standard deviation
     ``var``, Unbiased variance
+    ``sem``, Unbiased standard error of the mean
     ``skew``, Unbiased skewness (3rd moment)
     ``kurt``, Unbiased kurtosis (4th moment)
     ``quantile``, Sample quantile (value at %)
@@ -1552,151 +1553,83 @@ While float dtypes are unchanged.
    casted
    casted.dtypes
 
+Selecting columns based on ``dtype``
+------------------------------------
 
-Working with package options
-----------------------------
+.. _basics.selectdtypes:
 
-.. _basics.working_with_options:
-.. versionadded:: 0.10.1
+.. versionadded:: 0.14.1
 
-pandas has an options system that let's you customize some aspects of it's behaviour,
-display-related options being those the user is must likely to adjust.
+The :meth:`~pandas.DataFrame.select_dtypes` method implements subsetting of columns
+based on their ``dtype``.
 
-Options have a full "dotted-style", case-insensitive name (e.g. ``display.max_rows``),
-You can get/set options directly as attributes of the top-level ``options`` attribute:
-
-.. ipython:: python
-
-   import pandas as pd
-   pd.options.display.max_rows
-   pd.options.display.max_rows = 999
-   pd.options.display.max_rows
-
-
-There is also an API composed of 4 relevant functions, available directly from the ``pandas``
-namespace, and they are:
-
-- ``get_option`` / ``set_option`` - get/set the value of a single option.
-- ``reset_option`` - reset one or more options to their default value.
-- ``describe_option`` - print the descriptions of one or more options.
-
-**Note:** developers can check out pandas/core/config.py for more info.
-
-All of the functions above accept a regexp pattern (``re.search`` style) as an argument,
-and so passing in a substring will work - as long as it is unambiguous :
+First, let's create a :class:`~pandas.DataFrame` with a slew of different
+dtypes:
 
 .. ipython:: python
 
-   get_option("display.max_rows")
-   set_option("display.max_rows",101)
-   get_option("display.max_rows")
-   set_option("max_r",102)
-   get_option("display.max_rows")
+   df = DataFrame({'string': list('abc'),
+                   'int64': list(range(1, 4)),
+                   'uint8': np.arange(3, 6).astype('u1'),
+                   'float64': np.arange(4.0, 7.0),
+                   'bool1': [True, False, True],
+                   'bool2': [False, True, False],
+                   'dates': pd.date_range('now', periods=3).values})
+   df['tdeltas'] = df.dates.diff()
+   df['uint64'] = np.arange(3, 6).astype('u8')
+   df['other_dates'] = pd.date_range('20130101', periods=3).values
+   df
 
 
-The following will **not work** because it matches multiple option names, e.g. ``display.max_colwidth``, ``display.max_rows``, ``display.max_columns``:
+``select_dtypes`` has two parameters ``include`` and ``exclude`` that allow you to
+say "give me the columns WITH these dtypes" (``include``) and/or "give the
+columns WITHOUT these dtypes" (``exclude``).
 
-.. ipython:: python
-   :okexcept:
-
-   try:
-       get_option("display.max_")
-   except KeyError as e:
-       print(e)
-
-
-**Note:** Using this form of shorthand may cause your code to break if new options with similar names are added in future versions.
-
-
-You can get a list of available options and their descriptions with ``describe_option``. When called
-with no argument ``describe_option`` will print out the descriptions for all available options.
-
-.. ipython:: python
-   :suppress:
-
-   reset_option("all")
-
+For example, to select ``bool`` columns
 
 .. ipython:: python
 
-   describe_option()
+   df.select_dtypes(include=[bool])
 
-
-or you can get the description for just the options that match the regexp you pass in:
-
-.. ipython:: python
-
-   describe_option("date")
-
-
-All options also have a default value, and you can use the ``reset_option`` to do just that:
-
-.. ipython:: python
-   :suppress:
-
-   reset_option("display.max_rows")
-
+You can also pass the name of a dtype in the `numpy dtype hierarchy
+<http://docs.scipy.org/doc/numpy/reference/arrays.scalars.html>`__:
 
 .. ipython:: python
 
-   get_option("display.max_rows")
-   set_option("display.max_rows",999)
-   get_option("display.max_rows")
-   reset_option("display.max_rows")
-   get_option("display.max_rows")
+   df.select_dtypes(include=['bool'])
 
+:meth:`~pandas.DataFrame.select_dtypes` also works with generic dtypes as well.
 
-It's also possible to reset multiple options at once (using a regex):
+For example, to select all numeric and boolean columns while excluding unsigned
+integers
 
 .. ipython:: python
 
-   reset_option("^display")
+   df.select_dtypes(include=['number', 'bool'], exclude=['unsignedinteger'])
 
-
-.. versionadded:: 0.13.1
-
-   Beginning with v0.13.1 the `option_context` context manager has been exposed through
-   the top-level API, allowing you to execute code with given option values. Option values
-   are restored automatically when you exit the `with` block:
+To select string columns you must use the ``object`` dtype:
 
 .. ipython:: python
 
-   with option_context("display.max_rows",10,"display.max_columns", 5):
-      print get_option("display.max_rows")
-      print get_option("display.max_columns")
+   df.select_dtypes(include=['object'])
 
-   print get_option("display.max_rows")
-   print get_option("display.max_columns")
-
-
-Console Output Formatting
--------------------------
-
-.. _basics.console_output:
-
-Use the ``set_eng_float_format`` function in the ``pandas.core.common`` module
-to alter the floating-point formatting of pandas objects to produce a particular
-format.
-
-For instance:
+To see all the child dtypes of a generic ``dtype`` like ``numpy.number`` you
+can define a function that returns a tree of child dtypes:
 
 .. ipython:: python
 
-   set_eng_float_format(accuracy=3, use_eng_prefix=True)
-   s = Series(randn(5), index=['a', 'b', 'c', 'd', 'e'])
-   s/1.e3
-   s/1.e6
+   def subdtypes(dtype):
+       subs = dtype.__subclasses__()
+       if not subs:
+           return dtype
+       return [dtype, [subdtypes(dt) for dt in subs]]
+
+All numpy dtypes are subclasses of ``numpy.generic``:
 
 .. ipython:: python
-   :suppress:
 
-   reset_option('^display\.')
+    subdtypes(np.generic)
 
+.. note::
 
-The ``set_printoptions`` function has a number of options for controlling how
-floating point numbers are formatted (using the ``precision`` argument) in the
-console and . The ``max_rows`` and ``max_columns`` control how many rows and
-columns of DataFrame objects are shown by default. If ``max_columns`` is set to
-0 (the default, in fact), the library will attempt to fit the DataFrame's
-string representation into the current terminal width, and defaulting to the
-summary view otherwise.
+   The ``include`` and ``exclude`` parameters must be non-string sequences.

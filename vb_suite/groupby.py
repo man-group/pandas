@@ -108,15 +108,25 @@ groupby_multi_different_numpy_functions = \
 # size() speed
 
 setup = common_setup + """
-df = DataFrame({'key1': np.random.randint(0, 500, size=100000),
-                'key2': np.random.randint(0, 100, size=100000),
-                'value1' : np.random.randn(100000),
-                'value2' : np.random.randn(100000),
-                'value3' : np.random.randn(100000)})
+n = 100000
+offsets = np.random.randint(n, size=n).astype('timedelta64[ns]')
+dates = np.datetime64('now') + offsets
+df = DataFrame({'key1': np.random.randint(0, 500, size=n),
+                'key2': np.random.randint(0, 100, size=n),
+                'value1' : np.random.randn(n),
+                'value2' : np.random.randn(n),
+                'value3' : np.random.randn(n),
+                'dates' : dates})
 """
 
 groupby_multi_size = Benchmark("df.groupby(['key1', 'key2']).size()",
                                setup, start_date=datetime(2011, 10, 1))
+
+groupby_dt_size = Benchmark("df.groupby(['dates']).size()",
+                            setup, start_date=datetime(2011, 10, 1))
+
+groupby_dt_timegrouper_size = Benchmark("df.groupby(TimeGrouper(key='dates', freq='M')).size()",
+                                        setup, start_date=datetime(2011, 10, 1))
 
 #----------------------------------------------------------------------
 # count() speed
@@ -232,18 +242,54 @@ data2[1::3] = np.nan
 labels = labels.take(np.random.permutation(len(labels)))
 """
 
-groupby_first = Benchmark('data.groupby(labels).first()', setup,
+groupby_first_float64 = Benchmark('data.groupby(labels).first()', setup,
                           start_date=datetime(2012, 5, 1))
 
 groupby_first_float32 = Benchmark('data2.groupby(labels).first()', setup,
                                   start_date=datetime(2013, 1, 1))
 
-groupby_last = Benchmark('data.groupby(labels).last()', setup,
+groupby_last_float64 = Benchmark('data.groupby(labels).last()', setup,
                          start_date=datetime(2012, 5, 1))
 
 groupby_last_float32 = Benchmark('data2.groupby(labels).last()', setup,
                                  start_date=datetime(2013, 1, 1))
 
+groupby_nth_float64_none = Benchmark('data.groupby(labels).nth(0)', setup,
+                                     start_date=datetime(2012, 5, 1))
+groupby_nth_float32_none = Benchmark('data2.groupby(labels).nth(0)', setup,
+                                     start_date=datetime(2013, 1, 1))
+groupby_nth_float64_any = Benchmark('data.groupby(labels).nth(0,dropna="all")', setup,
+                                     start_date=datetime(2012, 5, 1))
+groupby_nth_float32_any = Benchmark('data2.groupby(labels).nth(0,dropna="all")', setup,
+                                    start_date=datetime(2013, 1, 1))
+
+# with datetimes (GH7555)
+setup = common_setup + """
+df = DataFrame({'a' : date_range('1/1/2011',periods=100000,freq='s'),'b' : range(100000)})
+"""
+
+groupby_first_datetimes = Benchmark('df.groupby("b").first()', setup,
+                                 start_date=datetime(2013, 5, 1))
+groupby_last_datetimes = Benchmark('df.groupby("b").last()', setup,
+                                 start_date=datetime(2013, 5, 1))
+groupby_nth_datetimes_none = Benchmark('df.groupby("b").nth(0)', setup,
+                                       start_date=datetime(2013, 5, 1))
+groupby_nth_datetimes_any = Benchmark('df.groupby("b").nth(0,dropna="all")', setup,
+                                      start_date=datetime(2013, 5, 1))
+
+# with object
+setup = common_setup + """
+df = DataFrame({'a' : ['foo']*100000,'b' : range(100000)})
+"""
+
+groupby_first_object = Benchmark('df.groupby("b").first()', setup,
+                                 start_date=datetime(2013, 5, 1))
+groupby_last_object = Benchmark('df.groupby("b").last()', setup,
+                                 start_date=datetime(2013, 5, 1))
+groupby_nth_object_none = Benchmark('df.groupby("b").nth(0)', setup,
+                                    start_date=datetime(2013, 5, 1))
+groupby_nth_object_any = Benchmark('df.groupby("b").nth(0,dropna="any")', setup,
+                                   start_date=datetime(2013, 5, 1))
 
 #----------------------------------------------------------------------
 # groupby_indices replacement, chop up Series
@@ -322,11 +368,16 @@ df = DataFrame(np.random.randint(1, 100, (10000, 2)))
 """
 
 # Not really a fair test as behaviour has changed!
-groupby_frame_nth = Benchmark("df.groupby(0).nth(0)", setup,
-                              start_date=datetime(2014, 3, 1))
+groupby_frame_nth_none = Benchmark("df.groupby(0).nth(0)", setup,
+                                   start_date=datetime(2014, 3, 1))
 
-groupby_series_nth = Benchmark("df[1].groupby(df[0]).nth(0)", setup,
-                               start_date=datetime(2014, 3, 1))
+groupby_series_nth_none = Benchmark("df[1].groupby(df[0]).nth(0)", setup,
+                                    start_date=datetime(2014, 3, 1))
+groupby_frame_nth_any= Benchmark("df.groupby(0).nth(0,dropna='any')", setup,
+                                 start_date=datetime(2014, 3, 1))
+
+groupby_series_nth_any = Benchmark("df[1].groupby(df[0]).nth(0,dropna='any')", setup,
+                                   start_date=datetime(2014, 3, 1))
 
 
 #----------------------------------------------------------------------
@@ -376,3 +427,22 @@ f_fillna = lambda x: x.fillna(method='pad')
 """
 
 groupby_transform = Benchmark("data.groupby(level='security_id').transform(f_fillna)", setup)
+groupby_transform_ufunc = Benchmark("data.groupby(level='date').transform(np.max)", setup)
+
+setup = common_setup + """
+np.random.seed(0)
+
+N = 120000
+N_TRANSITIONS = 1400
+
+# generate groups
+transition_points = np.random.permutation(np.arange(N))[:N_TRANSITIONS]
+transition_points.sort()
+transitions = np.zeros((N,), dtype=np.bool)
+transitions[transition_points] = True
+g = transitions.cumsum()
+
+df = DataFrame({ 'signal' : np.random.rand(N)})
+"""
+
+groupby_transform_series = Benchmark("df['signal'].groupby(g).transform(np.mean)", setup)

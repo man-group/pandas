@@ -4,6 +4,9 @@ Base and utility classes for pandas objects.
 from pandas import compat
 import numpy as np
 from pandas.core import common as com
+import pandas.core.nanops as nanops
+import pandas.tslib as tslib
+from pandas.util.decorators import cache_readonly
 
 class StringMixin(object):
 
@@ -236,20 +239,20 @@ class IndexOpsMixin(object):
 
     def max(self):
         """ The maximum value of the object """
-        import pandas.core.nanops
-        return pandas.core.nanops.nanmax(self.values)
+        return nanops.nanmax(self.values)
 
     def min(self):
         """ The minimum value of the object """
-        import pandas.core.nanops
-        return pandas.core.nanops.nanmin(self.values)
+        return nanops.nanmin(self.values)
 
     def value_counts(self, normalize=False, sort=True, ascending=False,
-                     bins=None):
+                     bins=None, dropna=True):
         """
-        Returns object containing counts of unique values. The resulting object
-        will be in descending order so that the first element is the most
-        frequently-occurring element. Excludes NA values.
+        Returns object containing counts of unique values.
+
+        The resulting object will be in descending order so that the
+        first element is the most frequently-occurring element.
+        Excludes NA values by default.
 
         Parameters
         ----------
@@ -263,6 +266,8 @@ class IndexOpsMixin(object):
         bins : integer, optional
             Rather than count values, group them into half-open bins,
             a convenience for pd.cut, only works with numeric data
+        dropna : boolean, default True
+            Don't include counts of NaN.
 
         Returns
         -------
@@ -270,7 +275,7 @@ class IndexOpsMixin(object):
         """
         from pandas.core.algorithms import value_counts
         return value_counts(self.values, sort=sort, ascending=ascending,
-                            normalize=normalize, bins=bins)
+                            normalize=normalize, bins=bins, dropna=dropna)
 
     def unique(self):
         """
@@ -284,15 +289,22 @@ class IndexOpsMixin(object):
         from pandas.core.nanops import unique1d
         return unique1d(self.values)
 
-    def nunique(self):
+    def nunique(self, dropna=True):
         """
-        Return count of unique elements in the object. Excludes NA values.
+        Return number of unique elements in the object.
+
+        Excludes NA values by default.
+
+        Parameters
+        ----------
+        dropna : boolean, default True
+            Don't include NaN in the count.
 
         Returns
         -------
         nunique : int
         """
-        return len(self.value_counts())
+        return len(self.value_counts(dropna=dropna))
 
     def factorize(self, sort=False, na_sentinel=-1):
         """
@@ -374,3 +386,109 @@ class DatetimeIndexOpsMixin(object):
     is_quarter_end = _field_accessor('is_quarter_end', "Logical indicating if last day of quarter (defined by frequency)")
     is_year_start = _field_accessor('is_year_start', "Logical indicating if first day of year (defined by frequency)")
     is_year_end = _field_accessor('is_year_end', "Logical indicating if last day of year (defined by frequency)")
+
+    @property
+    def _box_func(self):
+        """
+        box function to get object from internal representation
+        """
+        raise NotImplementedError
+
+    def _box_values(self, values):
+        """
+        apply box func to passed values
+        """
+        import pandas.lib as lib
+        return lib.map_infer(values, self._box_func)
+
+    @cache_readonly
+    def hasnans(self):
+        """ return if I have any nans; enables various perf speedups """
+        return (self.asi8 == tslib.iNaT).any()
+
+    @property
+    def asobject(self):
+        from pandas.core.index import Index
+        return Index(self._box_values(self.asi8), name=self.name, dtype=object)
+
+    def tolist(self):
+        """
+        See ndarray.tolist
+        """
+        return list(self.asobject)
+
+    def min(self, axis=None):
+        """
+        Overridden ndarray.min to return an object
+        """
+        try:
+            i8 = self.asi8
+
+            # quick check
+            if len(i8) and self.is_monotonic:
+                if i8[0] != tslib.iNaT:
+                    return self._box_func(i8[0])
+
+            if self.hasnans:
+                mask = i8 == tslib.iNaT
+                min_stamp = self[~mask].asi8.min()
+            else:
+                min_stamp = i8.min()
+            return self._box_func(min_stamp)
+        except ValueError:
+            return self._na_value
+
+    def max(self, axis=None):
+        """
+        Overridden ndarray.max to return an object
+        """
+        try:
+            i8 = self.asi8
+
+            # quick check
+            if len(i8) and self.is_monotonic:
+                if i8[-1] != tslib.iNaT:
+                    return self._box_func(i8[-1])
+
+            if self.hasnans:
+                mask = i8 == tslib.iNaT
+                max_stamp = self[~mask].asi8.max()
+            else:
+                max_stamp = i8.max()
+            return self._box_func(max_stamp)
+        except ValueError:
+            return self._na_value
+
+    @property
+    def _formatter_func(self):
+        """
+        Format function to convert value to representation
+        """
+        return str
+
+    def _format_footer(self):
+        tagline = 'Length: %d, Freq: %s, Timezone: %s'
+        return tagline % (len(self), self.freqstr, self.tz)
+
+    def __unicode__(self):
+        formatter = self._formatter_func
+        summary = str(self.__class__) + '\n'
+
+        n = len(self)
+        if n == 0:
+            pass
+        elif n == 1:
+            first = formatter(self[0])
+            summary += '[%s]\n' % first
+        elif n == 2:
+            first = formatter(self[0])
+            last = formatter(self[-1])
+            summary += '[%s, %s]\n' % (first, last)
+        else:
+            first = formatter(self[0])
+            last = formatter(self[-1])
+            summary += '[%s, ..., %s]\n' % (first, last)
+
+        summary += self._format_footer()
+        return summary
+

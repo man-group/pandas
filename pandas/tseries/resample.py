@@ -13,6 +13,7 @@ import pandas.compat as compat
 
 from pandas.lib import Timestamp
 import pandas.lib as lib
+import pandas.tslib as tslib
 
 
 _DEFAULT_METHOD = 'mean'
@@ -151,7 +152,8 @@ class TimeGrouper(Grouper):
             binner = labels = DatetimeIndex(data=[], freq=self.freq, name=ax.name)
             return binner, [], labels
 
-        first, last = _get_range_edges(ax, self.freq, closed=self.closed,
+        first, last = ax.min(), ax.max()
+        first, last = _get_range_edges(first, last, self.freq, closed=self.closed,
                                        base=self.base)
         tz = ax.tz
         binner = labels = DatetimeIndex(freq=self.freq,
@@ -162,7 +164,7 @@ class TimeGrouper(Grouper):
 
         # a little hack
         trimmed = False
-        if (len(binner) > 2 and binner[-2] == ax.max() and
+        if (len(binner) > 2 and binner[-2] == last and
                 self.closed == 'right'):
 
             binner = binner[:-1]
@@ -172,7 +174,7 @@ class TimeGrouper(Grouper):
         binner, bin_edges = self._adjust_bin_edges(binner, ax_values)
 
         # general version, knowing nothing about relative frequencies
-        bins = lib.generate_bins_dt64(ax_values, bin_edges, self.closed)
+        bins = lib.generate_bins_dt64(ax_values, bin_edges, self.closed, hasnans=ax.hasnans)
 
         if self.closed == 'right':
             labels = binner
@@ -185,6 +187,10 @@ class TimeGrouper(Grouper):
                 labels = labels[1:]
             elif not trimmed:
                 labels = labels[:-1]
+
+        if ax.hasnans:
+            binner = binner.insert(0, tslib.NaT)
+            labels = labels.insert(0, tslib.NaT)
 
         # if we end up with more labels than bins
         # adjust the labels
@@ -348,7 +354,7 @@ def _take_new_index(obj, indexer, new_index, axis=0):
         raise NotImplementedError
 
 
-def _get_range_edges(axis, offset, closed='left', base=0):
+def _get_range_edges(first, last, offset, closed='left', base=0):
     if isinstance(offset, compat.string_types):
         offset = to_offset(offset)
 
@@ -356,10 +362,9 @@ def _get_range_edges(axis, offset, closed='left', base=0):
         day_nanos = _delta_to_nanoseconds(timedelta(1))
         # #1165
         if (day_nanos % offset.nanos) == 0:
-            return _adjust_dates_anchored(axis[0], axis[-1], offset,
+            return _adjust_dates_anchored(first, last, offset,
                                           closed=closed, base=base)
 
-    first, last = axis.min(), axis.max()
     if not isinstance(offset, Tick):  # and first.time() != last.time():
         # hack!
         first = tools.normalize_date(first)

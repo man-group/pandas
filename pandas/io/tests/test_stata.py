@@ -60,17 +60,27 @@ class TestStata(tm.TestCase):
         self.dta14_113 = os.path.join(self.dirpath, 'stata5_113.dta')
         self.dta14_114 = os.path.join(self.dirpath, 'stata5_114.dta')
         self.dta14_115 = os.path.join(self.dirpath, 'stata5_115.dta')
+        self.dta14_117 = os.path.join(self.dirpath, 'stata5_117.dta')
 
         self.csv15 = os.path.join(self.dirpath, 'stata6.csv')
         self.dta15_113 = os.path.join(self.dirpath, 'stata6_113.dta')
         self.dta15_114 = os.path.join(self.dirpath, 'stata6_114.dta')
         self.dta15_115 = os.path.join(self.dirpath, 'stata6_115.dta')
+        self.dta15_117 = os.path.join(self.dirpath, 'stata6_117.dta')
 
     def read_dta(self, file):
         return read_stata(file, convert_dates=True)
 
     def read_csv(self, file):
         return read_csv(file, parse_dates=True)
+
+    def test_read_empty_dta(self):
+        empty_ds = DataFrame(columns=['unit'])
+        # GH 7369, make sure can read a 0-obs dta file
+        with tm.ensure_clean() as path:
+            empty_ds.to_stata(path,write_index=False)
+            empty_ds2 = read_stata(path)
+            tm.assert_frame_equal(empty_ds, empty_ds2)
 
     def test_read_dta1(self):
         reader_114 = StataReader(self.dta1_114)
@@ -273,6 +283,11 @@ class TestStata(tm.TestCase):
             self.assertEqual(result, expected)
             self.assertIsInstance(result, unicode)
 
+        with tm.ensure_clean() as path:
+            encoded.to_stata(path,encoding='latin-1', write_index=False)
+            reread_encoded = read_stata(path, encoding='latin-1')
+            tm.assert_frame_equal(encoded, reread_encoded)
+
     def test_read_write_dta11(self):
         original = DataFrame([(1, 2, 3, 4)],
                              columns=['good', compat.u('b\u00E4d'), '8number', 'astringwithmorethan32characters______'])
@@ -346,9 +361,12 @@ class TestStata(tm.TestCase):
         parsed_114.index.name = 'index'
         parsed_115 = self.read_dta(self.dta14_115)
         parsed_115.index.name = 'index'
+        parsed_117 = self.read_dta(self.dta14_117)
+        parsed_117.index.name = 'index'
 
         tm.assert_frame_equal(parsed_114, parsed_113)
         tm.assert_frame_equal(parsed_114, parsed_115)
+        tm.assert_frame_equal(parsed_114, parsed_117)
 
         with tm.ensure_clean() as path:
             parsed_114.to_stata(path, {'date_td': 'td'})
@@ -367,10 +385,12 @@ class TestStata(tm.TestCase):
         parsed_113 = self.read_dta(self.dta15_113)
         parsed_114 = self.read_dta(self.dta15_114)
         parsed_115 = self.read_dta(self.dta15_115)
+        parsed_117 = self.read_dta(self.dta15_117)
 
         tm.assert_frame_equal(expected, parsed_114)
         tm.assert_frame_equal(parsed_113, parsed_114)
         tm.assert_frame_equal(parsed_114, parsed_115)
+        tm.assert_frame_equal(parsed_114, parsed_117)
 
     def test_timestamp_and_label(self):
         original = DataFrame([(1,)], columns=['var'])

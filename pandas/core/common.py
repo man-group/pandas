@@ -1392,7 +1392,7 @@ def backfill_2d(values, limit=None, mask=None, dtype=None):
 
 
 def _clean_interp_method(method, order=None, **kwargs):
-    valid = ['linear', 'time', 'values', 'nearest', 'zero', 'slinear',
+    valid = ['linear', 'time', 'index', 'values', 'nearest', 'zero', 'slinear',
              'quadratic', 'cubic', 'barycentric', 'polynomial',
              'krogh', 'piecewise_polynomial',
              'pchip', 'spline']
@@ -1457,7 +1457,7 @@ def interpolate_1d(xvalues, yvalues, method='linear', limit=None,
         result.fill(np.nan)
         return result
 
-    if method in ['linear', 'time', 'values']:
+    if method in ['linear', 'time', 'index', 'values']:
         if method in ('values', 'index'):
             inds = np.asarray(xvalues)
             # hack for DatetimeIndex, #1646
@@ -1538,6 +1538,14 @@ def _interpolate_scipy_wrapper(x, y, new_x, method, fill_value=None,
         terp = interpolate.UnivariateSpline(x, y, k=order)
         new_y = terp(new_x)
     else:
+        # GH 7295: need to be able to write for some reason
+        # in some circumstances: check all three
+        if not x.flags.writeable:
+            x = x.copy()
+        if not y.flags.writeable:
+            y = y.copy()
+        if not new_x.flags.writeable:
+            new_x = new_x.copy()
         method = alt_methods[method]
         new_y = method(x, y, new_x)
     return new_y
@@ -1595,6 +1603,66 @@ def _get_fill_func(method):
 #----------------------------------------------------------------------
 # Lots of little utilities
 
+def _validate_date_like_dtype(dtype):
+    try:
+        typ = np.datetime_data(dtype)[0]
+    except ValueError as e:
+        raise TypeError('%s' % e)
+    if typ != 'generic' and typ != 'ns':
+        raise ValueError('%r is too specific of a frequency, try passing %r'
+                         % (dtype.name, dtype.type.__name__))
+
+
+def _invalidate_string_dtypes(dtype_set):
+    """Change string like dtypes to object for ``DataFrame.select_dtypes()``."""
+    non_string_dtypes = dtype_set - _string_dtypes
+    if non_string_dtypes != dtype_set:
+        raise TypeError("string dtypes are not allowed, use 'object' instead")
+
+
+def _get_dtype_from_object(dtype):
+    """Get a numpy dtype.type-style object.
+
+    Notes
+    -----
+    If nothing can be found, returns ``object``.
+    """
+    # type object from a dtype
+    if isinstance(dtype, type) and issubclass(dtype, np.generic):
+        return dtype
+    elif isinstance(dtype, np.dtype):  # dtype object
+        try:
+            _validate_date_like_dtype(dtype)
+        except TypeError:
+            # should still pass if we don't have a datelike
+            pass
+        return dtype.type
+    elif isinstance(dtype, compat.string_types):
+        if dtype == 'datetime' or dtype == 'timedelta':
+            dtype += '64'
+        try:
+            return _get_dtype_from_object(getattr(np, dtype))
+        except AttributeError:
+            # handles cases like _get_dtype(int)
+            # i.e., python objects that are valid dtypes (unlike user-defined
+            # types, in general)
+            pass
+    return _get_dtype_from_object(np.dtype(dtype))
+
+
+_string_dtypes = frozenset(map(_get_dtype_from_object, (compat.binary_type,
+                                                        compat.text_type)))
+
+
+def _get_info_slice(obj, indexer):
+    """Slice the info axis of `obj` with `indexer`."""
+    if not hasattr(obj, '_info_axis_number'):
+        raise TypeError('object of type %r has no info axis' %
+                        type(obj).__name__)
+    slices = [slice(None)] * obj.ndim
+    slices[obj._info_axis_number] = indexer
+    return tuple(slices)
+
 
 def _maybe_box(indexer, values, obj, key):
 
@@ -1604,6 +1672,7 @@ def _maybe_box(indexer, values, obj, key):
 
     # return the value
     return values
+
 
 def _maybe_box_datetimelike(value):
     # turn a datetime like into a Timestamp/timedelta as needed
@@ -1738,7 +1807,7 @@ def _possibly_cast_to_datetime(value, dtype, coerce=False):
                 if value == tslib.iNaT or isnull(value):
                     value = tslib.iNaT
             else:
-                value = np.array(value)
+                value = np.array(value,copy=False)
 
                 # have a scalar array-like (e.g. NaT)
                 if value.ndim == 0:
@@ -1782,24 +1851,81 @@ def _possibly_cast_to_datetime(value, dtype, coerce=False):
             value.dtype == np.object_)):
             pass
 
+        # try to infer if we have a datetimelike here
+        # otherwise pass thru
         else:
-            # we might have a array (or single object) that is datetime like,
-            # and no dtype is passed don't change the value unless we find a
-            # datetime set
-            v = value
-            if not is_list_like(v):
-                v = [v]
-            if len(v):
-                inferred_type = lib.infer_dtype(v)
-                if inferred_type in ['datetime', 'datetime64']:
-                    try:
-                        value = tslib.array_to_datetime(np.array(v))
-                    except:
-                        pass
-                elif inferred_type in ['timedelta', 'timedelta64']:
-                    from pandas.tseries.timedeltas import \
-                        _possibly_cast_to_timedelta
-                    value = _possibly_cast_to_timedelta(value, coerce='compat')
+            value = _possibly_infer_to_datetimelike(value)
+
+    return value
+
+
+def _possibly_infer_to_datetimelike(value):
+    # we might have a array (or single object) that is datetime like,
+    # and no dtype is passed don't change the value unless we find a
+    # datetime/timedelta set
+
+    # this is pretty strict in that a datetime/timedelta is REQUIRED
+    # in addition to possible nulls/string likes
+
+    # ONLY strings are NOT datetimelike
+
+    v = value
+    if not is_list_like(v):
+        v = [v]
+    v = np.array(v,copy=False)
+    shape = v.shape
+    if not v.ndim == 1:
+        v = v.ravel()
+
+    if len(v):
+
+        def _try_datetime(v):
+            # safe coerce to datetime64
+            try:
+                return tslib.array_to_datetime(v, raise_=True).reshape(shape)
+            except:
+                return v
+
+        def _try_timedelta(v):
+            # safe coerce to timedelta64
+
+            # will try first with a string & object conversion
+            from pandas.tseries.timedeltas import to_timedelta
+            try:
+                return to_timedelta(v).values.reshape(shape)
+            except:
+
+                # this is for compat with numpy < 1.7
+                # but string-likes will fail here
+
+                from pandas.tseries.timedeltas import \
+                     _possibly_cast_to_timedelta
+                try:
+                    return _possibly_cast_to_timedelta(v, coerce='compat').reshape(shape)
+                except:
+                    return v
+
+        # do a quick inference for perf
+        sample = v[:min(3,len(v))]
+        inferred_type = lib.infer_dtype(sample)
+
+        if inferred_type in ['datetime', 'datetime64']:
+            value = _try_datetime(v)
+        elif inferred_type in ['timedelta', 'timedelta64']:
+            value = _try_timedelta(v)
+
+        # its possible to have nulls intermixed within the datetime or timedelta
+        # these will in general have an inferred_type of 'mixed', so have to try
+        # both datetime and timedelta
+
+        # try timedelta first to avoid spurious datetime conversions
+        # e.g. '00:00:01' is a timedelta but technically is also a datetime
+        elif inferred_type in ['mixed']:
+
+            if lib.is_possible_datetimelike_array(_ensure_object(v)):
+                value = _try_timedelta(v)
+                if lib.infer_dtype(value) in ['mixed']:
+                    value = _try_datetime(v)
 
     return value
 
@@ -2111,92 +2237,96 @@ def is_number(obj):
     return isinstance(obj, (numbers.Number, np.number))
 
 
-def is_integer_dtype(arr_or_dtype):
+def _get_dtype(arr_or_dtype):
     if isinstance(arr_or_dtype, np.dtype):
-        tipo = arr_or_dtype.type
-    else:
-        tipo = arr_or_dtype.dtype.type
-    return (issubclass(tipo, np.integer) and not
-            (issubclass(tipo, np.datetime64) or
-             issubclass(tipo, np.timedelta64)))
+        return arr_or_dtype
+    if isinstance(arr_or_dtype, type):
+        return np.dtype(arr_or_dtype)
+    return arr_or_dtype.dtype
 
 
-def _is_int_or_datetime_dtype(arr_or_dtype):
-    # also timedelta64
+def _get_dtype_type(arr_or_dtype):
     if isinstance(arr_or_dtype, np.dtype):
-        tipo = arr_or_dtype.type
-    else:
-        tipo = arr_or_dtype.dtype.type
+        return arr_or_dtype.type
+    if isinstance(arr_or_dtype, type):
+        return np.dtype(arr_or_dtype).type
+    return arr_or_dtype.dtype.type
+
+
+def _is_any_int_dtype(arr_or_dtype):
+    tipo = _get_dtype_type(arr_or_dtype)
     return issubclass(tipo, np.integer)
 
 
+def is_integer_dtype(arr_or_dtype):
+    tipo = _get_dtype_type(arr_or_dtype)
+    return (issubclass(tipo, np.integer) and
+            not issubclass(tipo, (np.datetime64, np.timedelta64)))
+
+
+def _is_int_or_datetime_dtype(arr_or_dtype):
+    tipo = _get_dtype_type(arr_or_dtype)
+    return (issubclass(tipo, np.integer) or
+            issubclass(tipo, (np.datetime64, np.timedelta64)))
+
+
 def is_datetime64_dtype(arr_or_dtype):
-    if isinstance(arr_or_dtype, np.dtype):
-        tipo = arr_or_dtype.type
-    elif isinstance(arr_or_dtype, type):
-        tipo = np.dtype(arr_or_dtype).type
-    else:
-        tipo = arr_or_dtype.dtype.type
+    tipo = _get_dtype_type(arr_or_dtype)
     return issubclass(tipo, np.datetime64)
 
 
 def is_datetime64_ns_dtype(arr_or_dtype):
-    if isinstance(arr_or_dtype, np.dtype):
-        tipo = arr_or_dtype
-    elif isinstance(arr_or_dtype, type):
-        tipo = np.dtype(arr_or_dtype)
-    else:
-        tipo = arr_or_dtype.dtype
+    tipo = _get_dtype(arr_or_dtype)
     return tipo == _NS_DTYPE
 
 
 def is_timedelta64_dtype(arr_or_dtype):
-    if isinstance(arr_or_dtype, np.dtype):
-        tipo = arr_or_dtype.type
-    elif isinstance(arr_or_dtype, type):
-        tipo = np.dtype(arr_or_dtype).type
-    else:
-        tipo = arr_or_dtype.dtype.type
+    tipo = _get_dtype_type(arr_or_dtype)
     return issubclass(tipo, np.timedelta64)
 
 
 def is_timedelta64_ns_dtype(arr_or_dtype):
-    if isinstance(arr_or_dtype, np.dtype):
-        tipo = arr_or_dtype.type
-    elif isinstance(arr_or_dtype, type):
-        tipo = np.dtype(arr_or_dtype).type
-    else:
-        tipo = arr_or_dtype.dtype.type
+    tipo = _get_dtype_type(arr_or_dtype)
     return tipo == _TD_DTYPE
 
 
-def needs_i8_conversion(arr_or_dtype):
-    return (is_datetime64_dtype(arr_or_dtype) or
-            is_timedelta64_dtype(arr_or_dtype))
+def _is_datetime_or_timedelta_dtype(arr_or_dtype):
+    tipo = _get_dtype_type(arr_or_dtype)
+    return issubclass(tipo, (np.datetime64, np.timedelta64))
+
+
+needs_i8_conversion = _is_datetime_or_timedelta_dtype
 
 
 def is_numeric_dtype(arr_or_dtype):
-    if isinstance(arr_or_dtype, np.dtype):
-        tipo = arr_or_dtype.type
-    else:
-        tipo = arr_or_dtype.dtype.type
+    tipo = _get_dtype_type(arr_or_dtype)
     return (issubclass(tipo, (np.number, np.bool_))
             and not issubclass(tipo, (np.datetime64, np.timedelta64)))
 
+
 def is_float_dtype(arr_or_dtype):
-    if isinstance(arr_or_dtype, np.dtype):
-        tipo = arr_or_dtype.type
-    else:
-        tipo = arr_or_dtype.dtype.type
+    tipo = _get_dtype_type(arr_or_dtype)
     return issubclass(tipo, np.floating)
 
 
+def _is_floating_dtype(arr_or_dtype):
+    tipo = _get_dtype_type(arr_or_dtype)
+    return isinstance(tipo, np.floating)
+
+
+def is_bool_dtype(arr_or_dtype):
+    tipo = _get_dtype_type(arr_or_dtype)
+    return issubclass(tipo, np.bool_)
+
+
 def is_complex_dtype(arr_or_dtype):
-    if isinstance(arr_or_dtype, np.dtype):
-        tipo = arr_or_dtype.type
-    else:
-        tipo = arr_or_dtype.dtype.type
+    tipo = _get_dtype_type(arr_or_dtype)
     return issubclass(tipo, np.complexfloating)
+
+
+def is_object_dtype(arr_or_dtype):
+    tipo = _get_dtype_type(arr_or_dtype)
+    return issubclass(tipo, np.object_)
 
 
 def is_re(obj):
@@ -2535,6 +2665,8 @@ def in_interactive_session():
 def in_qtconsole():
     """
     check if we're inside an IPython qtconsole
+
+    DEPRECATED: This is no longer needed, or working, in IPython 3 and above.
     """
     try:
         ip = get_ipython()
@@ -2552,6 +2684,9 @@ def in_qtconsole():
 def in_ipnb():
     """
     check if we're inside an IPython Notebook
+
+    DEPRECATED: This is no longer used in pandas, and won't work in IPython 3
+    and above.
     """
     try:
         ip = get_ipython()

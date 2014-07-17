@@ -4,7 +4,7 @@ from pandas import compat
 import os
 
 import numpy as np
-
+import nose
 from pandas import Series, DataFrame, DatetimeIndex, Timestamp
 import pandas as pd
 read_json = pd.read_json
@@ -600,11 +600,28 @@ class TestPandasContainer(tm.TestCase):
         for c in ['created_at', 'closed_at', 'updated_at']:
             self.assertEqual(result[c].dtype, 'datetime64[ns]')
 
+    def test_timedelta(self):
+        tm._skip_if_not_numpy17_friendly()
+
+        from datetime import timedelta
+        converter = lambda x: pd.to_timedelta(x,unit='ms')
+
+        s = Series([timedelta(23), timedelta(seconds=5)])
+        self.assertEqual(s.dtype,'timedelta64[ns]')
+        assert_series_equal(s, pd.read_json(s.to_json(),typ='series').apply(converter))
+
+        frame = DataFrame([timedelta(23), timedelta(seconds=5)])
+        self.assertEqual(frame[0].dtype,'timedelta64[ns]')
+        assert_frame_equal(
+            frame, pd.read_json(frame.to_json()).apply(converter))
+
     def test_default_handler(self):
         from datetime import timedelta
-        frame = DataFrame([timedelta(23), timedelta(seconds=5)])
+
+        frame = DataFrame([timedelta(23), timedelta(seconds=5), 42])
         self.assertRaises(OverflowError, frame.to_json)
-        expected = DataFrame([str(timedelta(23)), str(timedelta(seconds=5))])
+
+        expected = DataFrame([str(timedelta(23)), str(timedelta(seconds=5)), 42])
         assert_frame_equal(
             expected, pd.read_json(frame.to_json(default_handler=str)))
 

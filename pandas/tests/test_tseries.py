@@ -8,13 +8,7 @@ import pandas.util.testing as tm
 from pandas.compat import range, lrange, zip
 import pandas.lib as lib
 import pandas.algos as algos
-from datetime import datetime
 
-def _skip_if_no_scipy():
-    try:
-        import scipy.stats
-    except ImportError:
-        raise nose.SkipTest("scipy not installed")
 
 class TestTseriesUtil(tm.TestCase):
     _multiprocess_can_split_ = True
@@ -342,7 +336,7 @@ def test_convert_objects_complex_number():
 
 
 def test_rank():
-    _skip_if_no_scipy()
+    tm._skip_if_no_scipy()
     from scipy.stats import rankdata
 
     def _check(arr):
@@ -658,6 +652,13 @@ class TestTypeInference(tm.TestCase):
         except ImportError:
             pass
 
+    def test_object(self):
+
+        # GH 7431
+        # cannot infer more than this as only a single element
+        arr = np.array([None],dtype='O')
+        result = lib.infer_dtype(arr)
+        self.assertEqual(result, 'mixed')
 
 class TestMoments(tm.TestCase):
     pass

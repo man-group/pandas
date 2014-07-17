@@ -28,13 +28,6 @@ import pandas.core.panel as panelm
 import pandas.util.testing as tm
 
 
-def _skip_if_no_scipy():
-    try:
-        import scipy.stats
-    except ImportError:
-        raise nose.SkipTest("no scipy.stats")
-
-
 class PanelTests(object):
     panel = None
 
@@ -126,6 +119,13 @@ class SafeForLongAndSparse(object):
                 return np.nan
             return np.std(x, ddof=1)
         self._check_stat_op('std', alt)
+
+    def test_sem(self):
+        def alt(x):
+            if len(x) < 2:
+                return np.nan
+            return np.std(x, ddof=1)/np.sqrt(len(x))
+        self._check_stat_op('sem', alt)
 
     # def test_skew(self):
     #     from scipy.stats import skew
@@ -1172,6 +1172,16 @@ class TestPanel(tm.TestCase, PanelTests, CheckIndexing,
         result = self.panel.apply(f, axis = ['minor_axis','items'])
         expected = Panel(dict([ (ax,f(self.panel.loc[:,ax])) for ax in self.panel.major_axis ]))
         assert_panel_equal(result,expected)
+
+        # with multi-indexes
+        # GH7469
+        index = MultiIndex.from_tuples([('one', 'a'), ('one', 'b'), ('two', 'a'), ('two', 'b')])
+        dfa = DataFrame(np.array(np.arange(12, dtype='int64')).reshape(4,3), columns=list("ABC"), index=index)
+        dfb = DataFrame(np.array(np.arange(10, 22, dtype='int64')).reshape(4,3), columns=list("ABC"), index=index)
+        p = Panel({'f':dfa, 'g':dfb})
+        result = p.apply(lambda x: x.sum(), axis=0)
+        expected = p.sum(0)
+        assert_frame_equal(result,expected)
 
     def test_reindex(self):
         ref = self.panel['ItemB']

@@ -67,7 +67,7 @@ cdef int64_t NPY_NAT = util.get_nat()
 compat_NaT = np.array([NPY_NAT]).astype('m8[ns]').item()
 
 # numpy actual nat object
-np_NaT = np.datetime64('NaT',dtype='M8')
+np_NaT = np.datetime64('NaT')
 
 try:
     basestring
@@ -340,13 +340,15 @@ class Timestamp(_Timestamp):
     def is_year_end(self):
         return self._get_start_end_field('is_year_end')
 
-    def tz_localize(self, tz):
+    def tz_localize(self, tz, infer_dst=False):
         """
         Convert naive Timestamp to local time zone
 
         Parameters
         ----------
         tz : pytz.timezone or dateutil.tz.tzfile
+        infer_dst : boolean, default False
+            Attempt to infer fall dst-transition hours based on order
 
         Returns
         -------
@@ -354,7 +356,10 @@ class Timestamp(_Timestamp):
         """
         if self.tzinfo is None:
             # tz naive, localize
-            return Timestamp(self.to_pydatetime(), tz=tz)
+            tz = maybe_get_tz(tz)
+            value = tz_localize_to_utc(np.array([self.value]), tz,
+                                       infer_dst=infer_dst)[0]
+            return Timestamp(value, tz=tz)
         else:
             raise Exception('Cannot localize tz-aware Timestamp, use '
                             'tz_convert for conversions')
@@ -747,7 +752,10 @@ cdef class _Timestamp(datetime):
 
         elif isinstance(other, timedelta) or hasattr(other, 'delta'):
             nanos = _delta_to_nanoseconds(other)
-            return Timestamp(self.value + nanos, tz=self.tzinfo, offset=self.offset)
+            result = Timestamp(self.value + nanos, tz=self.tzinfo, offset=self.offset)
+            if getattr(other, 'normalize', False):
+                result = Timestamp(normalize_date(result))
+            return result
 
         result = datetime.__add__(self, other)
         if isinstance(result, datetime):
@@ -886,8 +894,11 @@ cdef convert_to_tsobject(object ts, object tz, object unit):
     if ts is None or ts is NaT or ts is np_NaT:
         obj.value = NPY_NAT
     elif is_datetime64_object(ts):
-        obj.value = _get_datetime64_nanos(ts)
-        pandas_datetime_to_datetimestruct(obj.value, PANDAS_FR_ns, &obj.dts)
+        if ts.view('i8') == iNaT:
+            obj.value = NPY_NAT
+        else:
+            obj.value = _get_datetime64_nanos(ts)
+            pandas_datetime_to_datetimestruct(obj.value, PANDAS_FR_ns, &obj.dts)
     elif is_integer_object(ts):
         if ts == NPY_NAT:
             obj.value = NPY_NAT
@@ -947,6 +958,7 @@ cdef convert_to_tsobject(object ts, object tz, object unit):
 
         if is_timestamp(ts):
             obj.value += ts.nanosecond
+            obj.dts.ps = ts.nanosecond * 1000
         _check_dts_bounds(&obj.dts)
         return obj
     elif PyDate_Check(ts):
@@ -1028,6 +1040,10 @@ cdef inline object _get_zone(object tz):
         return 'UTC'
     else:
         if _treat_tz_as_dateutil(tz):
+            if '.tar.gz' in tz._filename:
+                raise ValueError('Bad tz filename. Dateutil on python 3 on windows has a bug which causes tzfile._filename to be the same for all '
+                                 'timezone files. Please construct dateutil timezones implicitly by passing a string like "dateutil/Europe/London" '
+                                 'when you construct your pandas objects instead of passing a timezone object. See https://github.com/pydata/pandas/pull/7362')
             return 'dateutil/' + tz._filename
         else:
             # tz is a pytz timezone or unknown.
@@ -1047,7 +1063,11 @@ cpdef inline object maybe_get_tz(object tz):
     '''
     if isinstance(tz, string_types):
         if tz.startswith('dateutil/'):
+            zone = tz[9:]
             tz = _dateutil_gettz(tz[9:])
+            # On Python 3 on Windows, the filename is not always set correctly.
+            if isinstance(tz, _dateutil_tzfile) and '.tar.gz' in tz._filename:
+                tz._filename = zone
         else:
             tz = pytz.timezone(tz)
         return tz
@@ -1282,10 +1302,13 @@ def array_to_datetime(ndarray[object] values, raise_=False, dayfirst=False,
             val = values[i]
 
             # set as nan if is even a datetime NaT
-            if _checknull_with_nat(val) or val is np_NaT:
+            if _checknull_with_nat(val):
                 oresult[i] = np.nan
             elif util.is_datetime64_object(val):
-                oresult[i] = val.item()
+                if val is np_NaT or val.view('i8') == iNaT:
+                    oresult[i] = np.nan
+                else:
+                    oresult[i] = val.item()
             else:
                 oresult[i] = val
         return oresult
@@ -1317,7 +1340,7 @@ def array_to_datetime(ndarray[object] values, raise_=False, dayfirst=False,
 
         return oresult
 
-def array_to_timedelta64(ndarray[object] values, coerce=False):
+def array_to_timedelta64(ndarray[object] values, unit='ns', coerce=False):
     """ convert an ndarray to an array of ints that are timedeltas
         force conversion if coerce = True,
         else will raise if cannot convert """
@@ -1330,7 +1353,7 @@ def array_to_timedelta64(ndarray[object] values, coerce=False):
     iresult = result.view('i8')
 
     for i in range(n):
-        result[i] = convert_to_timedelta64(values[i], 'ns', coerce)
+        result[i] = convert_to_timedelta64(values[i], unit, coerce)
     return iresult
 
 def convert_to_timedelta(object ts, object unit='ns', coerce=False):
@@ -1354,24 +1377,35 @@ cdef inline convert_to_timedelta64(object ts, object unit, object coerce):
     # handle the numpy < 1.7 case
     """
     if _checknull_with_nat(ts):
-        ts = np.timedelta64(iNaT)
+        return np.timedelta64(iNaT)
     elif util.is_datetime64_object(ts):
         # only accept a NaT here
         if ts.astype('int64') == iNaT:
-            ts = np.timedelta64(iNaT)
+            return np.timedelta64(iNaT)
     elif isinstance(ts, np.timedelta64):
         ts = ts.astype("m8[{0}]".format(unit.lower()))
     elif is_integer_object(ts):
         if ts == iNaT:
-            ts = np.timedelta64(iNaT)
+            return np.timedelta64(iNaT)
         else:
             if util.is_array(ts):
                 ts = ts.astype('int64').item()
-            ts = cast_from_unit(ts, unit)
-            if _np_version_under1p7:
-                ts = timedelta(microseconds=ts/1000.0)
+            if unit in ['Y','M','W']:
+                if _np_version_under1p7:
+                    raise ValueError("unsupported unit for native timedelta under this numpy {0}".format(unit))
+                else:
+                    ts = np.timedelta64(ts,unit)
             else:
-                ts = np.timedelta64(ts)
+                ts = cast_from_unit(ts, unit)
+                if _np_version_under1p7:
+                    ts = timedelta(microseconds=ts/1000.0)
+                else:
+                    ts = np.timedelta64(ts)
+    elif util.is_string_object(ts):
+        if ts in _nat_strings or coerce:
+            return np.timedelta64(iNaT)
+        else:
+            raise ValueError("Invalid type for timedelta scalar: %s" % type(ts))
 
     if _np_version_under1p7:
         if not isinstance(ts, timedelta):
@@ -1722,6 +1756,12 @@ cpdef inline int64_t cast_from_unit(object ts, object unit) except -1:
     if unit == 'D' or unit == 'd':
         m = 1000000000L * 86400
         p = 6
+    elif unit == 'h':
+        m = 1000000000L * 3600
+        p = 6
+    elif unit == 'm':
+        m = 1000000000L * 60
+        p = 6
     elif unit == 's':
         m = 1000000000L
         p = 6
@@ -1731,9 +1771,11 @@ cpdef inline int64_t cast_from_unit(object ts, object unit) except -1:
     elif unit == 'us':
         m = 1000L
         p = 0
-    else:
+    elif unit == 'ns' or unit is None:
         m = 1L
         p = 0
+    else:
+        raise ValueError("cannot cast unit {0}".format(unit))
 
     # just give me the unit back
     if ts is None:
@@ -1949,6 +1991,11 @@ cdef inline bint _treat_tz_as_dateutil(object tz):
     return hasattr(tz, '_trans_list') and hasattr(tz, '_trans_idx')
 
 
+def _p_tz_cache_key(tz):
+    ''' Python interface for cache function to facilitate testing.'''
+    return _tz_cache_key(tz)
+
+
 cdef inline object _tz_cache_key(object tz):
     """
     Return the key in the cache for the timezone info object or None if unknown.
@@ -1965,7 +2012,11 @@ cdef inline object _tz_cache_key(object tz):
     if isinstance(tz, _pytz_BaseTzInfo):
         return tz.zone
     elif isinstance(tz, _dateutil_tzfile):
-        return tz._filename
+        if '.tar.gz' in tz._filename:
+            raise ValueError('Bad tz filename. Dateutil on python 3 on windows has a bug which causes tzfile._filename to be the same for all '
+                             'timezone files. Please construct dateutil timezones implicitly by passing a string like "dateutil/Europe/London" '
+                             'when you construct your pandas objects instead of passing a timezone object. See https://github.com/pydata/pandas/pull/7362')
+        return 'dateutil' + tz._filename
     else:
         return None
 
@@ -3006,6 +3057,9 @@ def dt64arr_to_periodarr(ndarray[int64_t] dtarr, int freq, tz=None):
 
     if tz is None:
         for i in range(l):
+            if dtarr[i] == iNaT:
+                out[i] = iNaT
+                continue
             pandas_datetime_to_datetimestruct(dtarr[i], PANDAS_FR_ns, &dts)
             out[i] = get_period_ordinal(dts.year, dts.month, dts.day,
                                         dts.hour, dts.min, dts.sec, dts.us, dts.ps, freq)
@@ -3027,6 +3081,9 @@ def periodarr_to_dt64arr(ndarray[int64_t] periodarr, int freq):
     out = np.empty(l, dtype='i8')
 
     for i in range(l):
+        if periodarr[i] == iNaT:
+            out[i] = iNaT
+            continue
         out[i] = period_ordinal_to_dt64(periodarr[i], freq)
 
     return out
@@ -3042,6 +3099,9 @@ cpdef int64_t period_asfreq(int64_t period_ordinal, int freq1, int freq2,
     """
     cdef:
         int64_t retval
+
+    if period_ordinal == iNaT:
+        return iNaT
 
     if end:
         retval = asfreq(period_ordinal, freq1, freq2, END)
@@ -3077,11 +3137,21 @@ def period_asfreq_arr(ndarray[int64_t] arr, int freq1, int freq2, bint end):
     else:
         relation = START
 
-    for i in range(n):
-        val = func(arr[i], relation, &finfo)
-        if val == INT32_MIN:
-            raise ValueError("Unable to convert to desired frequency.")
-        result[i] = val
+    mask = arr == iNaT
+    if mask.any():      # NaT process
+        for i in range(n):
+            val = arr[i]
+            if val != iNaT:
+                val = func(val, relation, &finfo)
+                if val == INT32_MIN:
+                    raise ValueError("Unable to convert to desired frequency.")
+            result[i] = val
+    else:
+        for i in range(n):
+            val = func(arr[i], relation, &finfo)
+            if val == INT32_MIN:
+                raise ValueError("Unable to convert to desired frequency.")
+            result[i] = val
 
     return result
 
@@ -3097,6 +3167,9 @@ cpdef int64_t period_ordinal_to_dt64(int64_t ordinal, int freq):
         pandas_datetimestruct dts
         date_info dinfo
         float subsecond_fraction
+
+    if ordinal == iNaT:
+        return NPY_NAT
 
     get_date_info(ordinal, freq, &dinfo)
 
@@ -3115,6 +3188,9 @@ cpdef int64_t period_ordinal_to_dt64(int64_t ordinal, int freq):
 def period_format(int64_t value, int freq, object fmt=None):
     cdef:
         int freq_group
+
+    if value == iNaT:
+        return repr(NaT)
 
     if fmt is None:
         freq_group = (freq // 1000) * 1000
@@ -3219,6 +3295,8 @@ def get_period_field(int code, int64_t value, int freq):
     cdef accessor f = _get_accessor_func(code)
     if f is NULL:
         raise ValueError('Unrecognized period code: %d' % code)
+    if value == iNaT:
+        return -1
     return f(value, freq)
 
 def get_period_field_arr(int code, ndarray[int64_t] arr, int freq):
@@ -3235,6 +3313,9 @@ def get_period_field_arr(int code, ndarray[int64_t] arr, int freq):
     out = np.empty(sz, dtype=np.int64)
 
     for i in range(sz):
+        if arr[i] == iNaT:
+            out[i] = -1
+            continue
         out[i] = f(arr[i], freq)
 
     return out
@@ -3301,13 +3382,16 @@ cpdef resolution(ndarray[int64_t] stamps, tz=None):
         return reso
 
 US_RESO = 0
-S_RESO = 1
-T_RESO = 2
-H_RESO = 3
-D_RESO = 4
+MS_RESO = 1
+S_RESO = 2
+T_RESO = 3
+H_RESO = 4
+D_RESO = 5
 
 cdef inline int _reso_stamp(pandas_datetimestruct *dts):
     if dts.us != 0:
+        if dts.us % 1000 == 0:
+            return MS_RESO
         return US_RESO
     elif dts.sec != 0:
         return S_RESO

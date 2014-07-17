@@ -1584,7 +1584,7 @@ def group_mean_bin_%(name)s(ndarray[%(dest_type2)s, ndim=2] out,
     for i in range(ngroups):
         for j in range(K):
             count = nobs[i, j]
-            if nobs[i, j] == 0:
+            if count == 0:
                 out[i, j] = nan
             else:
                 out[i, j] = sumx[i, j] / count
@@ -2234,7 +2234,7 @@ def generate_put_template(template, use_ints=True, use_floats=True,
     date_like_list = [
         ('int64', 'int64_t', 'float64_t', 'np.float64'),
     ]
-    object_list = [('object', 'object', 'float64_t', 'np.float64')]
+    object_list = [('object', 'object', 'object', 'np.object_')]
     function_list = []
     if use_floats:
         function_list.extend(floats_list)

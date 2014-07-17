@@ -28,12 +28,6 @@ from numpy.testing.decorators import slow
 import pandas.tools.plotting as plotting
 
 
-def _skip_if_no_scipy():
-    try:
-        import scipy
-    except ImportError:
-        raise nose.SkipTest("no scipy")
-
 def _skip_if_no_scipy_gaussian_kde():
     try:
         import scipy
@@ -356,6 +350,54 @@ class TestPlotBase(tm.TestCase):
             self.assertEqual(xerr, xerr_count)
             self.assertEqual(yerr, yerr_count)
 
+    def _check_box_return_type(self, returned, return_type, expected_keys=None):
+        """
+        Check box returned type is correct
+
+        Parameters
+        ----------
+        returned : object to be tested, returned from boxplot
+        return_type : str
+            return_type passed to boxplot
+        expected_keys : list-like, optional
+            group labels in subplot case. If not passed,
+            the function checks assuming boxplot uses single ax
+        """
+        from matplotlib.axes import Axes
+        types = {'dict': dict, 'axes': Axes, 'both': tuple}
+        if expected_keys is None:
+            # should be fixed when the returning default is changed
+            if return_type is None:
+                return_type = 'dict'
+
+            self.assertTrue(isinstance(returned, types[return_type]))
+            if return_type == 'both':
+                self.assertIsInstance(returned.ax, Axes)
+                self.assertIsInstance(returned.lines, dict)
+        else:
+            # should be fixed when the returning default is changed
+            if return_type is None:
+                for r in self._flatten_visible(returned):
+                    self.assertIsInstance(r, Axes)
+                return
+
+            self.assertTrue(isinstance(returned, OrderedDict))
+            self.assertEqual(sorted(returned.keys()), sorted(expected_keys))
+            for key, value in iteritems(returned):
+                self.assertTrue(isinstance(value, types[return_type]))
+                # check returned dict has correct mapping
+                if return_type == 'axes':
+                    self.assertEqual(value.get_title(), key)
+                elif return_type == 'both':
+                    self.assertEqual(value.ax.get_title(), key)
+                    self.assertIsInstance(value.ax, Axes)
+                    self.assertIsInstance(value.lines, dict)
+                elif return_type == 'dict':
+                    line = value['medians'][0]
+                    self.assertEqual(line.get_axes().get_title(), key)
+                else:
+                    raise AssertionError
+
 
 @tm.mplskip
 class TestSeriesPlots(TestPlotBase):
@@ -415,12 +457,50 @@ class TestSeriesPlots(TestPlotBase):
         self._check_text_labels(ax.title, 'Test')
         self._check_axes_shape(ax, axes_num=1, layout=(1, 1), figsize=(16, 8))
 
-    def test_ts_area_lim(self):
-        ax = self.ts.plot(kind='area', stacked=False)
+    def test_ts_line_lim(self):
+        ax = self.ts.plot()
         xmin, xmax = ax.get_xlim()
         lines = ax.get_lines()
         self.assertEqual(xmin, lines[0].get_data(orig=False)[0][0])
         self.assertEqual(xmax, lines[0].get_data(orig=False)[0][-1])
+        tm.close()
+
+        ax = self.ts.plot(secondary_y=True)
+        xmin, xmax = ax.get_xlim()
+        lines = ax.get_lines()
+        self.assertEqual(xmin, lines[0].get_data(orig=False)[0][0])
+        self.assertEqual(xmax, lines[0].get_data(orig=False)[0][-1])
+
+    def test_ts_area_lim(self):
+        ax = self.ts.plot(kind='area', stacked=False)
+        xmin, xmax = ax.get_xlim()
+        line = ax.get_lines()[0].get_data(orig=False)[0]
+        self.assertEqual(xmin, line[0])
+        self.assertEqual(xmax, line[-1])
+        tm.close()
+
+        # GH 7471
+        ax = self.ts.plot(kind='area', stacked=False, x_compat=True)
+        xmin, xmax = ax.get_xlim()
+        line = ax.get_lines()[0].get_data(orig=False)[0]
+        self.assertEqual(xmin, line[0])
+        self.assertEqual(xmax, line[-1])
+        tm.close()
+
+        tz_ts = self.ts.copy()
+        tz_ts.index = tz_ts.tz_localize('GMT').tz_convert('CET')
+        ax = tz_ts.plot(kind='area', stacked=False, x_compat=True)
+        xmin, xmax = ax.get_xlim()
+        line = ax.get_lines()[0].get_data(orig=False)[0]
+        self.assertEqual(xmin, line[0])
+        self.assertEqual(xmax, line[-1])
+        tm.close()
+
+        ax = tz_ts.plot(kind='area', stacked=False, secondary_y=True)
+        xmin, xmax = ax.get_xlim()
+        line = ax.get_lines()[0].get_data(orig=False)[0]
+        self.assertEqual(xmin, line[0])
+        self.assertEqual(xmax, line[-1])
 
     def test_line_area_nan_series(self):
         values = [1, 2, np.nan, 3]
@@ -561,16 +641,16 @@ class TestSeriesPlots(TestPlotBase):
         df = self.hist_df
 
         axes = _check_plot_works(df.height.hist, by=df.gender, layout=(2, 1))
-        self._check_axes_shape(axes, axes_num=2, layout=(2, 1), figsize=(10, 5))
+        self._check_axes_shape(axes, axes_num=2, layout=(2, 1))
 
         axes = _check_plot_works(df.height.hist, by=df.category, layout=(4, 1))
-        self._check_axes_shape(axes, axes_num=4, layout=(4, 1), figsize=(10, 5))
+        self._check_axes_shape(axes, axes_num=4, layout=(4, 1))
 
         axes = _check_plot_works(df.height.hist, by=df.classroom, layout=(2, 2))
-        self._check_axes_shape(axes, axes_num=3, layout=(2, 2), figsize=(10, 5))
+        self._check_axes_shape(axes, axes_num=3, layout=(2, 2))
 
-        axes = _check_plot_works(df.height.hist, by=df.category, layout=(4, 2))
-        self._check_axes_shape(axes, axes_num=4, layout=(4, 2), figsize=(10, 5))
+        axes = _check_plot_works(df.height.hist, by=df.category, layout=(4, 2), figsize=(12, 7))
+        self._check_axes_shape(axes, axes_num=4, layout=(4, 2), figsize=(12, 7))
 
     @slow
     def test_hist_no_overlap(self):
@@ -607,7 +687,7 @@ class TestSeriesPlots(TestPlotBase):
 
     @slow
     def test_kde(self):
-        _skip_if_no_scipy()
+        tm._skip_if_no_scipy()
         _skip_if_no_scipy_gaussian_kde()
         _check_plot_works(self.ts.plot, kind='kde')
         _check_plot_works(self.ts.plot, kind='density')
@@ -616,7 +696,7 @@ class TestSeriesPlots(TestPlotBase):
 
     @slow
     def test_kde_kwargs(self):
-        _skip_if_no_scipy()
+        tm._skip_if_no_scipy()
         _skip_if_no_scipy_gaussian_kde()
         from numpy import linspace
         _check_plot_works(self.ts.plot, kind='kde', bw_method=.5, ind=linspace(-100,100,20))
@@ -626,7 +706,7 @@ class TestSeriesPlots(TestPlotBase):
 
     @slow
     def test_kde_color(self):
-        _skip_if_no_scipy()
+        tm._skip_if_no_scipy()
         _skip_if_no_scipy_gaussian_kde()
         ax = self.ts.plot(kind='kde', logy=True, color='r')
         self._check_ax_scales(ax, yaxis='log')
@@ -780,6 +860,12 @@ class TestDataFramePlots(TestPlotBase):
 
         axes = _check_plot_works(df.plot, subplots=True, title='blah')
         self._check_axes_shape(axes, axes_num=3, layout=(3, 1))
+        for ax in axes[:2]:
+            self._check_visible(ax.get_xticklabels(), visible=False)
+            self._check_visible([ax.xaxis.get_label()], visible=False)
+        for ax in [axes[2]]:
+            self._check_visible(ax.get_xticklabels())
+            self._check_visible([ax.xaxis.get_label()])
 
         _check_plot_works(df.plot, title='blah')
 
@@ -810,6 +896,13 @@ class TestDataFramePlots(TestPlotBase):
         df = DataFrame({'x': np.random.rand(10)})
         axes = _check_plot_works(df.plot, kind='bar', subplots=True)
         self._check_axes_shape(axes, axes_num=1, layout=(1, 1))
+
+        # When ax is supplied and required number of axes is 1,
+        # passed ax should be used:
+        fig, ax = self.plt.subplots()
+        axes = df.plot(kind='bar', subplots=True, ax=ax)
+        self.assertEqual(len(axes), 1)
+        self.assertIs(ax.get_axes(), axes[0])
 
     def test_nonnumeric_exclude(self):
         df = DataFrame({'A': ["x", "y", "z"], 'B': [1, 2, 3]})
@@ -1019,6 +1112,27 @@ class TestDataFramePlots(TestPlotBase):
             self.assert_numpy_array_equal(ax.lines[0].get_ydata(), expected1)
             self.assert_numpy_array_equal(ax.lines[1].get_ydata(), expected2)
 
+    def test_line_lim(self):
+        df = DataFrame(rand(6, 3), columns=['x', 'y', 'z'])
+        ax = df.plot()
+        xmin, xmax = ax.get_xlim()
+        lines = ax.get_lines()
+        self.assertEqual(xmin, lines[0].get_data()[0][0])
+        self.assertEqual(xmax, lines[0].get_data()[0][-1])
+
+        ax = df.plot(secondary_y=True)
+        xmin, xmax = ax.get_xlim()
+        lines = ax.get_lines()
+        self.assertEqual(xmin, lines[0].get_data()[0][0])
+        self.assertEqual(xmax, lines[0].get_data()[0][-1])
+
+        axes = df.plot(secondary_y=True, subplots=True)
+        for ax in axes:
+            xmin, xmax = ax.get_xlim()
+            lines = ax.get_lines()
+            self.assertEqual(xmin, lines[0].get_data()[0][0])
+            self.assertEqual(xmax, lines[0].get_data()[0][-1])
+
     def test_area_lim(self):
         df = DataFrame(rand(6, 4),
                        columns=['x', 'y', 'z', 'four'])
@@ -1213,43 +1327,40 @@ class TestDataFramePlots(TestPlotBase):
                        align=align, width=width, position=position,
                        grid=True)
 
-        tick_pos = np.arange(len(df))
-
         axes = self._flatten_visible(axes)
 
         for ax in axes:
             if kind == 'bar':
                 axis = ax.xaxis
                 ax_min, ax_max = ax.get_xlim()
+                min_edge = min([p.get_x() for p in ax.patches])
+                max_edge = max([p.get_x() + p.get_width() for p in ax.patches])
             elif kind == 'barh':
                 axis = ax.yaxis
                 ax_min, ax_max = ax.get_ylim()
+                min_edge = min([p.get_y() for p in ax.patches])
+                max_edge = max([p.get_y() + p.get_height() for p in ax.patches])
             else:
                 raise ValueError
+
+            # GH 7498
+            # compare margins between lim and bar edges
+            self.assertAlmostEqual(ax_min, min_edge - 0.25)
+            self.assertAlmostEqual(ax_max, max_edge + 0.25)
 
             p = ax.patches[0]
             if kind == 'bar' and (stacked is True or subplots is True):
                 edge = p.get_x()
                 center = edge + p.get_width() * position
-                tickoffset = width * position
             elif kind == 'bar' and stacked is False:
                 center = p.get_x() + p.get_width() * len(df.columns) * position
                 edge = p.get_x()
-                if align == 'edge':
-                    tickoffset = width * (position - 0.5) + p.get_width() * 1.5
-                else:
-                    tickoffset = width * position + p.get_width()
             elif kind == 'barh' and (stacked is True or subplots is True):
                 center = p.get_y() + p.get_height() * position
                 edge = p.get_y()
-                tickoffset = width * position
             elif kind == 'barh' and stacked is False:
                 center = p.get_y() + p.get_height() * len(df.columns) * position
                 edge = p.get_y()
-                if align == 'edge':
-                    tickoffset = width * (position - 0.5) + p.get_height() * 1.5
-                else:
-                    tickoffset = width * position + p.get_height()
             else:
                 raise ValueError
 
@@ -1265,58 +1376,42 @@ class TestDataFramePlots(TestPlotBase):
             else:
                 raise ValueError
 
-            # Check starting point and axes limit margin
-            self.assertEqual(ax_min, tick_pos[0] - tickoffset - 0.25)
-            self.assertEqual(ax_max, tick_pos[-1] - tickoffset + 1)
-            # Check tick locations and axes limit margin
-            t_min = axis.get_ticklocs()[0] - tickoffset
-            t_max = axis.get_ticklocs()[-1] - tickoffset
-            self.assertAlmostEqual(ax_min, t_min - 0.25)
-            self.assertAlmostEqual(ax_max, t_max + 1.0)
         return axes
 
     @slow
     def test_bar_stacked_center(self):
         # GH2157
         df = DataFrame({'A': [3] * 5, 'B': lrange(5)}, index=lrange(5))
-        axes = self._check_bar_alignment(df, kind='bar', stacked=True)
-        # Check the axes has the same drawing range before fixing # GH4525
-        self.assertEqual(axes[0].get_xlim(), (-0.5, 4.75))
-
+        self._check_bar_alignment(df, kind='bar', stacked=True)
         self._check_bar_alignment(df, kind='bar', stacked=True, width=0.9)
-
-        axes = self._check_bar_alignment(df, kind='barh', stacked=True)
-        self.assertEqual(axes[0].get_ylim(), (-0.5, 4.75))
-
+        self._check_bar_alignment(df, kind='barh', stacked=True)
         self._check_bar_alignment(df, kind='barh', stacked=True, width=0.9)
 
     @slow
     def test_bar_center(self):
         df = DataFrame({'A': [3] * 5, 'B': lrange(5)}, index=lrange(5))
-        axes = self._check_bar_alignment(df, kind='bar', stacked=False)
-        self.assertEqual(axes[0].get_xlim(), (-0.75, 4.5))
-
+        self._check_bar_alignment(df, kind='bar', stacked=False)
         self._check_bar_alignment(df, kind='bar', stacked=False, width=0.9)
-
-        axes = self._check_bar_alignment(df, kind='barh', stacked=False)
-        self.assertEqual(axes[0].get_ylim(), (-0.75, 4.5))
-
+        self._check_bar_alignment(df, kind='barh', stacked=False)
         self._check_bar_alignment(df, kind='barh', stacked=False, width=0.9)
 
     @slow
     def test_bar_subplots_center(self):
         df = DataFrame({'A': [3] * 5, 'B': lrange(5)}, index=lrange(5))
-        axes = self._check_bar_alignment(df, kind='bar', subplots=True)
-        for ax in axes:
-            self.assertEqual(ax.get_xlim(), (-0.5, 4.75))
-
+        self._check_bar_alignment(df, kind='bar', subplots=True)
         self._check_bar_alignment(df, kind='bar', subplots=True, width=0.9)
-
-        axes = self._check_bar_alignment(df, kind='barh', subplots=True)
-        for ax in axes:
-            self.assertEqual(ax.get_ylim(), (-0.5, 4.75))
-
+        self._check_bar_alignment(df, kind='barh', subplots=True)
         self._check_bar_alignment(df, kind='barh', subplots=True, width=0.9)
+
+    @slow
+    def test_bar_align_single_column(self):
+        df = DataFrame(randn(5))
+        self._check_bar_alignment(df, kind='bar', stacked=False)
+        self._check_bar_alignment(df, kind='bar', stacked=True)
+        self._check_bar_alignment(df, kind='barh', stacked=False)
+        self._check_bar_alignment(df, kind='barh', stacked=True)
+        self._check_bar_alignment(df, kind='bar', subplots=True)
+        self._check_bar_alignment(df, kind='barh', subplots=True)
 
     @slow
     def test_bar_edge(self):
@@ -1390,17 +1485,23 @@ class TestDataFramePlots(TestPlotBase):
 
         df = DataFrame(np.random.rand(10, 2), columns=['Col1', 'Col2'])
         df['X'] = Series(['A', 'A', 'A', 'A', 'A', 'B', 'B', 'B', 'B', 'B'])
+        df['Y'] = Series(['A'] * 10)
         _check_plot_works(df.boxplot, by='X')
 
-        # When ax is supplied, existing axes should be used:
+        # When ax is supplied and required number of axes is 1,
+        # passed ax should be used:
         fig, ax = self.plt.subplots()
         axes = df.boxplot('Col1', by='X', ax=ax)
         self.assertIs(ax.get_axes(), axes)
 
-        # Multiple columns with an ax argument is not supported
         fig, ax = self.plt.subplots()
-        with tm.assertRaisesRegexp(ValueError, 'existing axis'):
-            df.boxplot(column=['Col1', 'Col2'], by='X', ax=ax)
+        axes = df.groupby('Y').boxplot(ax=ax, return_type='axes')
+        self.assertIs(ax.get_axes(), axes['A'])
+
+        # Multiple columns with an ax argument should use same figure
+        fig, ax = self.plt.subplots()
+        axes = df.boxplot(column=['Col1', 'Col2'], by='X', ax=ax, return_type='axes')
+        self.assertIs(axes['Col1'].get_figure(), fig)
 
         # When by is None, check that all relevant lines are present in the dict
         fig, ax = self.plt.subplots()
@@ -1421,69 +1522,24 @@ class TestDataFramePlots(TestPlotBase):
 
         with tm.assert_produces_warning(FutureWarning):
             result = df.boxplot()
-        self.assertIsInstance(result, dict)  # change to Axes in future
+        # change to Axes in future
+        self._check_box_return_type(result, 'dict')
 
         with tm.assert_produces_warning(False):
             result = df.boxplot(return_type='dict')
-        self.assertIsInstance(result, dict)
+        self._check_box_return_type(result, 'dict')
 
         with tm.assert_produces_warning(False):
             result = df.boxplot(return_type='axes')
-        self.assertIsInstance(result, mpl.axes.Axes)
+        self._check_box_return_type(result, 'axes')
 
         with tm.assert_produces_warning(False):
             result = df.boxplot(return_type='both')
-        self.assertIsInstance(result, tuple)
-
-    @slow
-    def test_boxplot_return_type_by(self):
-        import matplotlib as mpl
-
-        df = DataFrame(np.random.randn(10, 2))
-        df['g'] = ['a'] * 5 + ['b'] * 5
-
-        # old style: return_type=None
-        result = df.boxplot(by='g')
-        self.assertIsInstance(result, np.ndarray)
-        self.assertIsInstance(result[0], mpl.axes.Axes)
-
-        result = df.boxplot(by='g', return_type='dict')
-        self.assertIsInstance(result, dict)
-        self.assertIsInstance(result[0], dict)
-
-        result = df.boxplot(by='g', return_type='axes')
-        self.assertIsInstance(result, dict)
-        self.assertIsInstance(result[0], mpl.axes.Axes)
-
-        result = df.boxplot(by='g', return_type='both')
-        self.assertIsInstance(result, dict)
-        self.assertIsInstance(result[0], tuple)
-        self.assertIsInstance(result[0][0], mpl.axes.Axes)
-        self.assertIsInstance(result[0][1], dict)
-
-        # now for groupby
-        with tm.assert_produces_warning(FutureWarning):
-            result = df.groupby('g').boxplot()
-        self.assertIsInstance(result, dict)
-        self.assertIsInstance(result['a'], dict)
-
-        result = df.groupby('g').boxplot(return_type='dict')
-        self.assertIsInstance(result, dict)
-        self.assertIsInstance(result['a'], dict)
-
-        result = df.groupby('g').boxplot(return_type='axes')
-        self.assertIsInstance(result, dict)
-        self.assertIsInstance(result['a'], mpl.axes.Axes)
-
-        result = df.groupby('g').boxplot(return_type='both')
-        self.assertIsInstance(result, dict)
-        self.assertIsInstance(result['a'], tuple)
-        self.assertIsInstance(result['a'][0], mpl.axes.Axes)
-        self.assertIsInstance(result['a'][1], dict)
+        self._check_box_return_type(result, 'both')
 
     @slow
     def test_kde(self):
-        _skip_if_no_scipy()
+        tm._skip_if_no_scipy()
         _skip_if_no_scipy_gaussian_kde()
         df = DataFrame(randn(100, 4))
         ax = _check_plot_works(df.plot, kind='kde')
@@ -1581,7 +1637,7 @@ class TestDataFramePlots(TestPlotBase):
 
     @slow
     def test_scatter(self):
-        _skip_if_no_scipy()
+        tm._skip_if_no_scipy()
 
         df = DataFrame(randn(100, 2))
         import pandas.tools.plotting as plt
@@ -2196,32 +2252,32 @@ class TestDataFrameGroupByPlots(TestPlotBase):
     @slow
     def test_boxplot(self):
         grouped = self.hist_df.groupby(by='gender')
-        box = _check_plot_works(grouped.boxplot, return_type='dict')
-        self._check_axes_shape(self.plt.gcf().axes, axes_num=2, layout=(1, 2))
+        axes = _check_plot_works(grouped.boxplot, return_type='axes')
+        self._check_axes_shape(axes.values(), axes_num=2, layout=(1, 2))
 
-        box = _check_plot_works(grouped.boxplot, subplots=False,
-                                return_type='dict')
-        self._check_axes_shape(self.plt.gcf().axes, axes_num=2, layout=(1, 2))
+        axes = _check_plot_works(grouped.boxplot, subplots=False,
+                                 return_type='axes')
+        self._check_axes_shape(axes, axes_num=1, layout=(1, 1))
 
         tuples = lzip(string.ascii_letters[:10], range(10))
         df = DataFrame(np.random.rand(10, 3),
                        index=MultiIndex.from_tuples(tuples))
 
         grouped = df.groupby(level=1)
-        box = _check_plot_works(grouped.boxplot, return_type='dict')
-        self._check_axes_shape(self.plt.gcf().axes, axes_num=10, layout=(4, 3))
+        axes = _check_plot_works(grouped.boxplot, return_type='axes')
+        self._check_axes_shape(axes.values(), axes_num=10, layout=(4, 3))
 
-        box = _check_plot_works(grouped.boxplot, subplots=False,
-                                return_type='dict')
-        self._check_axes_shape(self.plt.gcf().axes, axes_num=10, layout=(4, 3))
+        axes = _check_plot_works(grouped.boxplot, subplots=False,
+                                 return_type='axes')
+        self._check_axes_shape(axes, axes_num=1, layout=(1, 1))
 
         grouped = df.unstack(level=1).groupby(level=0, axis=1)
-        box = _check_plot_works(grouped.boxplot, return_type='dict')
-        self._check_axes_shape(self.plt.gcf().axes, axes_num=3, layout=(2, 2))
+        axes = _check_plot_works(grouped.boxplot, return_type='axes')
+        self._check_axes_shape(axes.values(), axes_num=3, layout=(2, 2))
 
-        box = _check_plot_works(grouped.boxplot, subplots=False,
-                                return_type='dict')
-        self._check_axes_shape(self.plt.gcf().axes, axes_num=3, layout=(2, 2))
+        axes = _check_plot_works(grouped.boxplot, subplots=False,
+                                 return_type='axes')
+        self._check_axes_shape(axes, axes_num=1, layout=(1, 1))
 
     def test_series_plot_color_kwargs(self):
         # GH1890
@@ -2251,22 +2307,34 @@ class TestDataFrameGroupByPlots(TestPlotBase):
     def test_grouped_hist(self):
         df = DataFrame(randn(500, 2), columns=['A', 'B'])
         df['C'] = np.random.randint(0, 4, 500)
+        df['D'] = ['X'] * 500
+
         axes = plotting.grouped_hist(df.A, by=df.C)
-        self._check_axes_shape(axes, axes_num=4, layout=(2, 2), figsize=(10, 5))
+        self._check_axes_shape(axes, axes_num=4, layout=(2, 2))
 
         tm.close()
         axes = df.hist(by=df.C)
-        self._check_axes_shape(axes, axes_num=4, layout=(2, 2), figsize=(10, 5))
+        self._check_axes_shape(axes, axes_num=4, layout=(2, 2))
+
+        tm.close()
+        # group by a key with single value
+        axes = df.hist(by='D', rot=30)
+        self._check_axes_shape(axes, axes_num=1, layout=(1, 1))
+        self._check_ticks_props(axes, xrot=30)
 
         tm.close()
         # make sure kwargs to hist are handled
+        xf, yf = 20, 18
+        xrot, yrot = 30, 40
         axes = plotting.grouped_hist(df.A, by=df.C, normed=True,
-                                     cumulative=True, bins=4)
-
+                                     cumulative=True, bins=4,
+                                     xlabelsize=xf, xrot=xrot, ylabelsize=yf, yrot=yrot)
         # height of last bin (index 5) must be 1.0
         for ax in axes.ravel():
             height = ax.get_children()[5].get_height()
             self.assertAlmostEqual(height, 1.0)
+        self._check_ticks_props(axes, xlabelsize=xf, xrot=xrot,
+                                ylabelsize=yf, yrot=yrot)
 
         tm.close()
         axes = plotting.grouped_hist(df.A, by=df.C, log=True)
@@ -2278,47 +2346,42 @@ class TestDataFrameGroupByPlots(TestPlotBase):
         with tm.assertRaises(AttributeError):
             plotting.grouped_hist(df.A, by=df.C, foo='bar')
 
-    def _check_box_dict(self, returned, return_type,
-                        expected_klass, expected_keys):
-        self.assertTrue(isinstance(returned, OrderedDict))
-        self.assertEqual(sorted(returned.keys()), sorted(expected_keys))
-        for key, value in iteritems(returned):
-            self.assertTrue(isinstance(value, expected_klass))
-            # check returned dict has correct mapping
-            if return_type == 'axes':
-                self.assertEqual(value.get_title(), key)
-            elif return_type == 'both':
-                self.assertEqual(value.ax.get_title(), key)
-            elif return_type == 'dict':
-                line = value['medians'][0]
-                self.assertEqual(line.get_axes().get_title(), key)
-            else:
-                raise AssertionError
+        with tm.assert_produces_warning(FutureWarning):
+            df.hist(by='C', figsize='default')
 
     @slow
     def test_grouped_box_return_type(self):
-        import matplotlib.axes
-
         df = self.hist_df
+
+        # old style: return_type=None
+        result = df.boxplot(by='gender')
+        self.assertIsInstance(result, np.ndarray)
+        self._check_box_return_type(result, None,
+                                    expected_keys=['height', 'weight', 'category'])
+
+        # now for groupby
+        with tm.assert_produces_warning(FutureWarning):
+            result = df.groupby('gender').boxplot()
+        self._check_box_return_type(result, 'dict', expected_keys=['Male', 'Female'])
 
         columns2 = 'X B C D A G Y N Q O'.split()
         df2 = DataFrame(random.randn(50, 10), columns=columns2)
         categories2 = 'A B C D E F G H I J'.split()
         df2['category'] = categories2 * 5
 
-        types = {'dict': dict, 'axes': matplotlib.axes.Axes, 'both': tuple}
-        for t, klass in iteritems(types):
+        for t in ['dict', 'axes', 'both']:
             returned = df.groupby('classroom').boxplot(return_type=t)
-            self._check_box_dict(returned, t, klass, ['A', 'B', 'C'])
+            self._check_box_return_type(returned, t, expected_keys=['A', 'B', 'C'])
 
             returned = df.boxplot(by='classroom', return_type=t)
-            self._check_box_dict(returned, t, klass, ['height', 'weight', 'category'])
+            self._check_box_return_type(returned, t,
+                                        expected_keys=['height', 'weight', 'category'])
 
             returned = df2.groupby('category').boxplot(return_type=t)
-            self._check_box_dict(returned, t, klass, categories2)
+            self._check_box_return_type(returned, t, expected_keys=categories2)
 
             returned = df2.boxplot(by='category', return_type=t)
-            self._check_box_dict(returned, t, klass, columns2)
+            self._check_box_return_type(returned, t, expected_keys=columns2)
 
     @slow
     def test_grouped_box_layout(self):
@@ -2342,8 +2405,16 @@ class TestDataFrameGroupByPlots(TestPlotBase):
                                 column='height', return_type='dict')
         self._check_axes_shape(self.plt.gcf().axes, axes_num=3, layout=(2, 2))
 
-        box = df.boxplot(column=['height', 'weight', 'category'], by='gender')
+        # GH 5897
+        axes = df.boxplot(column=['height', 'weight', 'category'], by='gender',
+                          return_type='axes')
         self._check_axes_shape(self.plt.gcf().axes, axes_num=3, layout=(2, 2))
+        for ax in [axes['height']]:
+            self._check_visible(ax.get_xticklabels(), visible=False)
+            self._check_visible([ax.xaxis.get_label()], visible=False)
+        for ax in [axes['weight'], axes['category']]:
+            self._check_visible(ax.get_xticklabels())
+            self._check_visible([ax.xaxis.get_label()])
 
         box = df.groupby('classroom').boxplot(
             column=['height', 'weight', 'category'], return_type='dict')
@@ -2371,29 +2442,28 @@ class TestDataFrameGroupByPlots(TestPlotBase):
                           layout=(1, 3))
 
         axes = _check_plot_works(df.hist, column='height', by=df.gender, layout=(2, 1))
-        self._check_axes_shape(axes, axes_num=2, layout=(2, 1), figsize=(10, 5))
+        self._check_axes_shape(axes, axes_num=2, layout=(2, 1))
 
         axes = _check_plot_works(df.hist, column='height', by=df.category, layout=(4, 1))
-        self._check_axes_shape(axes, axes_num=4, layout=(4, 1), figsize=(10, 5))
+        self._check_axes_shape(axes, axes_num=4, layout=(4, 1))
 
         axes = _check_plot_works(df.hist, column='height', by=df.category,
                                  layout=(4, 2), figsize=(12, 8))
-
         self._check_axes_shape(axes, axes_num=4, layout=(4, 2), figsize=(12, 8))
 
         # GH 6769
         axes = _check_plot_works(df.hist, column='height', by='classroom', layout=(2, 2))
-        self._check_axes_shape(axes, axes_num=3, layout=(2, 2), figsize=(10, 5))
+        self._check_axes_shape(axes, axes_num=3, layout=(2, 2))
 
         # without column
         axes = _check_plot_works(df.hist, by='classroom')
-        self._check_axes_shape(axes, axes_num=3, layout=(2, 2), figsize=(10, 5))
+        self._check_axes_shape(axes, axes_num=3, layout=(2, 2))
 
         axes = _check_plot_works(df.hist, by='gender', layout=(3, 5))
-        self._check_axes_shape(axes, axes_num=2, layout=(3, 5), figsize=(10, 5))
+        self._check_axes_shape(axes, axes_num=2, layout=(3, 5))
 
         axes = _check_plot_works(df.hist, column=['height', 'weight', 'category'])
-        self._check_axes_shape(axes, axes_num=3, layout=(2, 2), figsize=(10, 5))
+        self._check_axes_shape(axes, axes_num=3, layout=(2, 2))
 
     @slow
     def test_axis_share_x(self):

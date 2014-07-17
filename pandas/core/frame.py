@@ -12,6 +12,7 @@ from __future__ import division
 # pylint: disable=E1101,E1103
 # pylint: disable=W0212,W0231,W0703,W0622
 
+import functools
 import collections
 import itertools
 import sys
@@ -25,19 +26,18 @@ import numpy.ma as ma
 from pandas.core.common import (isnull, notnull, PandasError, _try_sort,
                                 _default_index, _maybe_upcast, _is_sequence,
                                 _infer_dtype_from_scalar, _values_from_object,
-                                is_list_like)
+                                is_list_like, _get_dtype)
 from pandas.core.generic import NDFrame, _shared_docs
 from pandas.core.index import Index, MultiIndex, _ensure_index
 from pandas.core.indexing import (_maybe_droplevels,
                                   _convert_to_index_sliceable,
-                                  _check_bool_indexer, _maybe_convert_indices)
+                                  _check_bool_indexer)
 from pandas.core.internals import (BlockManager,
                                    create_block_manager_from_arrays,
                                    create_block_manager_from_blocks)
 from pandas.core.series import Series
 import pandas.computation.expressions as expressions
 from pandas.computation.eval import eval as _eval
-from pandas.computation.scope import _ensure_scope
 from numpy import percentile as _quantile
 from pandas.compat import(range, zip, lrange, lmap, lzip, StringIO, u,
                           OrderedDict, raise_with_traceback)
@@ -470,14 +470,12 @@ class DataFrame(NDFrame):
         Return a html representation for a particular DataFrame.
         Mainly for IPython notebook.
         """
-        # ipnb in html repr mode allows scrolling
-        # users strongly prefer to h-scroll a wide HTML table in the browser
-        # then to get a summary view. GH3541, GH3573
-        ipnbh = com.in_ipnb() and get_option('display.notebook_repr_html')
-
         # qtconsole doesn't report it's line width, and also
         # behaves badly when outputting an HTML table
         # that doesn't fit the window, so disable it.
+        # XXX: In IPython 3.x and above, the Qt console will not attempt to
+        # display HTML, so this check can be removed when support for IPython 2.x
+        # is no longer needed.
         if com.in_qtconsole():
             # 'HTML output is disabled in QtConsole'
             return None
@@ -671,47 +669,43 @@ class DataFrame(NDFrame):
         else:  # pragma: no cover
             raise ValueError("outtype %s not understood" % outtype)
 
-    def to_gbq(self, destination_table, schema=None, col_order=None,
-               if_exists='fail', **kwargs):
+    def to_gbq(self, destination_table, project_id=None, chunksize=10000,
+               verbose=True, reauth=False):
         """Write a DataFrame to a Google BigQuery table.
 
-        If the table exists, the DataFrame will be appended. If not, a new
-        table will be created, in which case the schema will have to be
-        specified. By default, rows will be written in the order they appear
-        in the DataFrame, though the user may specify an alternative order.
+        THIS IS AN EXPERIMENTAL LIBRARY
+
+        If the table exists, the dataframe will be written to the table using
+        the defined table schema and column types. For simplicity, this method
+        uses the Google BigQuery streaming API. The to_gbq method chunks data
+        into a default chunk size of 10,000. Failures return the complete error
+        response which can be quite long depending on the size of the insert.
+        There are several important limitations of the Google streaming API
+        which are detailed at:
+        https://developers.google.com/bigquery/streaming-data-into-bigquery.
 
         Parameters
-        ---------------
+        ----------
+        dataframe : DataFrame
+            DataFrame to be written
         destination_table : string
-             name of table to be written, in the form 'dataset.tablename'
-        schema : sequence (optional)
-             list of column types in order for data to be inserted, e.g.
-             ['INTEGER', 'TIMESTAMP', 'BOOLEAN']
-        col_order : sequence (optional)
-             order which columns are to be inserted, e.g. ['primary_key',
-             'birthday', 'username']
-        if_exists : {'fail', 'replace', 'append'} (optional)
-            - fail: If table exists, do nothing.
-            - replace: If table exists, drop it, recreate it, and insert data.
-            - append: If table exists, insert data. Create if does not exist.
-        kwargs are passed to the Client constructor
+            Name of table to be written, in the form 'dataset.tablename'
+        project_id : str
+            Google BigQuery Account project ID.
+        chunksize : int (default 10000)
+            Number of rows to be inserted in each chunk from the dataframe.
+        verbose : boolean (default True)
+            Show percentage complete
+        reauth : boolean (default False)
+            Force Google BigQuery to reauthenticate the user. This is useful
+            if multiple accounts are used.
 
-        Raises
-        ------
-        SchemaMissing :
-            Raised if the 'if_exists' parameter is set to 'replace', but no
-            schema is specified
-        TableExists :
-            Raised if the specified 'destination_table' exists but the
-            'if_exists' parameter is set to 'fail' (the default)
-        InvalidSchema :
-            Raised if the 'schema' parameter does not match the provided
-            DataFrame
         """
 
         from pandas.io import gbq
-        return gbq.to_gbq(self, destination_table, schema=None, col_order=None,
-                          if_exists='fail', **kwargs)
+        return gbq.to_gbq(self, destination_table, project_id=project_id,
+                          chunksize=chunksize, verbose=verbose,
+                          reauth=reauth)
 
     @classmethod
     def from_records(cls, data, index=None, exclude=None, columns=None,
@@ -1166,7 +1160,7 @@ class DataFrame(NDFrame):
             Missing data representation
         float_format : string, default None
             Format string for floating point numbers
-        cols : sequence, optional
+        columns : sequence, optional
             Columns to write
         header : boolean or list of string, default True
             Write out column names. If a list of string is given it is
@@ -1177,7 +1171,7 @@ class DataFrame(NDFrame):
             Column label for index column(s) if desired. If None is given, and
             `header` and `index` are True, then the index names are used. A
             sequence should be given if the DataFrame uses MultiIndex.
-        startow :
+        startrow :
             upper left cell row to dump data frame
         startcol :
             upper left cell column to dump data frame
@@ -1358,7 +1352,7 @@ class DataFrame(NDFrame):
                  bold_rows=True, longtable=False, escape=True):
         """
         Render a DataFrame to a tabular environment table. You can splice
-        this into a LaTeX document. Requires \\usepackage(booktabs}.
+        this into a LaTeX document. Requires \\usepackage{booktabs}.
 
         `to_latex`-specific options:
 
@@ -1873,6 +1867,118 @@ class DataFrame(NDFrame):
         kwargs['resolvers'] = kwargs.get('resolvers', ()) + resolvers
         return _eval(expr, **kwargs)
 
+    def select_dtypes(self, include=None, exclude=None):
+        """Return a subset of a DataFrame including/excluding columns based on
+        their ``dtype``.
+
+        Parameters
+        ----------
+        include, exclude : list-like
+            A list of dtypes or strings to be included/excluded. You must pass
+            in a non-empty sequence for at least one of these.
+
+        Raises
+        ------
+        ValueError
+            * If both of ``include`` and ``exclude`` are empty
+            * If ``include`` and ``exclude`` have overlapping elements
+            * If any kind of string dtype is passed in.
+        TypeError
+            * If either of ``include`` or ``exclude`` is not a sequence
+
+        Returns
+        -------
+        subset : DataFrame
+            The subset of the frame including the dtypes in ``include`` and
+            excluding the dtypes in ``exclude``.
+
+        Notes
+        -----
+        * To select all *numeric* types use the numpy dtype ``numpy.number``
+        * To select strings you must use the ``object`` dtype, but note that
+          this will return *all* object dtype columns
+        * See the `numpy dtype hierarchy
+          <http://docs.scipy.org/doc/numpy/reference/arrays.scalars.html>`__
+
+        Examples
+        --------
+        >>> df = pd.DataFrame({'a': np.random.randn(6).astype('f4'),
+        ...                    'b': [True, False] * 3,
+        ...                    'c': [1.0, 2.0] * 3})
+        >>> df
+                a      b  c
+        0  0.3962   True  1
+        1  0.1459  False  2
+        2  0.2623   True  1
+        3  0.0764  False  2
+        4 -0.9703   True  1
+        5 -1.2094  False  2
+        >>> df.select_dtypes(include=['float64'])
+           c
+        0  1
+        1  2
+        2  1
+        3  2
+        4  1
+        5  2
+        >>> df.select_dtypes(exclude=['floating'])
+               b
+        0   True
+        1  False
+        2   True
+        3  False
+        4   True
+        5  False
+        """
+        include, exclude = include or (), exclude or ()
+        if not (com.is_list_like(include) and com.is_list_like(exclude)):
+            raise TypeError('include and exclude must both be non-string'
+                            ' sequences')
+        selection = tuple(map(frozenset, (include, exclude)))
+
+        if not any(selection):
+            raise ValueError('at least one of include or exclude must be '
+                             'nonempty')
+
+        # convert the myriad valid dtypes object to a single representation
+        include, exclude = map(lambda x:
+                               frozenset(map(com._get_dtype_from_object, x)),
+                               selection)
+        for dtypes in (include, exclude):
+            com._invalidate_string_dtypes(dtypes)
+
+        # can't both include AND exclude!
+        if not include.isdisjoint(exclude):
+            raise ValueError('include and exclude overlap on %s'
+                             % (include & exclude))
+
+        # empty include/exclude -> defaults to True
+        # three cases (we've already raised if both are empty)
+        # case 1: empty include, nonempty exclude
+        # we have True, True, ... True for include, same for exclude
+        # in the loop below we get the excluded
+        # and when we call '&' below we get only the excluded
+        # case 2: nonempty include, empty exclude
+        # same as case 1, but with include
+        # case 3: both nonempty
+        # the "union" of the logic of case 1 and case 2:
+        # we get the included and excluded, and return their logical and
+        include_these = Series(not bool(include), index=self.columns)
+        exclude_these = Series(not bool(exclude), index=self.columns)
+
+        def is_dtype_instance_mapper(column, dtype):
+            return column, functools.partial(issubclass, dtype.type)
+
+        for column, f in itertools.starmap(is_dtype_instance_mapper,
+                                           self.dtypes.iteritems()):
+            if include:  # checks for the case of empty include or exclude
+                include_these[column] = any(map(f, include))
+            if exclude:
+                exclude_these[column] = not any(map(f, exclude))
+
+        dtype_indexer = include_these & exclude_these
+        return self.loc[com._get_info_slice(self, dtype_indexer)]
+
     def _box_item_values(self, key, values):
         items = self.columns[self.columns.get_loc(key)]
         if values.ndim == 2:
@@ -1931,11 +2037,7 @@ class DataFrame(NDFrame):
         if key.values.dtype != np.bool_:
             raise TypeError('Must pass DataFrame with boolean values only')
 
-        if self._is_mixed_type:
-            if not self._is_numeric_mixed_type:
-                raise TypeError(
-                    'Cannot do boolean setting on mixed-type frame')
-
+        self._check_inplace_setting(value)
         self._check_setitem_copy()
         self.where(-key, value, inplace=True)
 
@@ -2022,7 +2124,13 @@ class DataFrame(NDFrame):
                 # GH 4107
                 try:
                     value = value.reindex(self.index).values
-                except:
+                except Exception as e:
+
+                    # duplicate axis
+                    if not value.index.is_unique:
+                        raise e
+
+                    # other
                     raise TypeError('incompatible index of inserted column '
                                     'with frame index')
 
@@ -2320,19 +2428,24 @@ class DataFrame(NDFrame):
         else:
             new_obj = self.copy()
 
-        def _maybe_cast(values, labels=None):
+        def _maybe_casted_values(index, labels=None):
+            if isinstance(index, PeriodIndex):
+                values = index.asobject
+            elif (isinstance(index, DatetimeIndex) and
+                  index.tz is not None):
+                values = index.asobject
+            else:
+                values = index.values
+                if values.dtype == np.object_:
+                    values = lib.maybe_convert_objects(values)
 
-            if values.dtype == np.object_:
-                values = lib.maybe_convert_objects(values)
-
-            # if we have the labels, extract the values with a mask
-            if labels is not None:
-                mask = labels == -1
-                values = values.take(labels)
-                if mask.any():
-                    values, changed = com._maybe_upcast_putmask(
-                        values, mask, np.nan)
-
+                # if we have the labels, extract the values with a mask
+                if labels is not None:
+                    mask = labels == -1
+                    values = values.take(labels)
+                    if mask.any():
+                        values, changed = com._maybe_upcast_putmask(values,
+                                                                    mask, np.nan)
             return values
 
         new_index = np.arange(len(new_obj))
@@ -2365,7 +2478,7 @@ class DataFrame(NDFrame):
                             col_name = tuple(name_lst)
 
                     # to ndarray and maybe infer different dtype
-                    level_values = _maybe_cast(lev.values, lab)
+                    level_values = _maybe_casted_values(lev, lab)
                     if level is None or i in level:
                         new_obj.insert(0, col_name, level_values)
 
@@ -2381,13 +2494,7 @@ class DataFrame(NDFrame):
                     lev_num = self.columns._get_level_number(col_level)
                     name_lst[lev_num] = name
                     name = tuple(name_lst)
-            if isinstance(self.index, PeriodIndex):
-                values = self.index.asobject
-            elif (isinstance(self.index, DatetimeIndex) and
-                  self.index.tz is not None):
-                values = self.index.asobject
-            else:
-                values = _maybe_cast(self.index.values)
+            values = _maybe_casted_values(self.index)
             new_obj.insert(0, name, values)
 
         new_obj.index = new_index
@@ -4181,6 +4288,8 @@ class DataFrame(NDFrame):
                 return _quantile(values, per)
 
         data = self._get_numeric_data() if numeric_only else self
+        if axis == 1:
+            data = data.T
 
         # need to know which cols are timestamp going in so that we can
         # map timestamp over them after getting the quantile.
@@ -4306,12 +4415,8 @@ class DataFrame(NDFrame):
 
         axis = self._get_axis_number(axis)
         if axis == 0:
-            if freq is None:
-                freq = self.index.freqstr or self.index.inferred_freq
             new_data.set_axis(1, self.index.to_period(freq=freq))
         elif axis == 1:
-            if freq is None:
-                freq = self.columns.freqstr or self.columns.inferred_freq
             new_data.set_axis(0, self.columns.to_period(freq=freq))
         else:  # pragma: no cover
             raise AssertionError('Axis must be 0 or 1. Got %s' % str(axis))

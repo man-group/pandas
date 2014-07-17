@@ -717,8 +717,8 @@ class NDFrame(PandasObject):
     def __array__(self, dtype=None):
         return _values_from_object(self)
 
-    def __array_wrap__(self, result, copy=False):
-        d = self._construct_axes_dict(self._AXIS_ORDERS, copy=copy)
+    def __array_wrap__(self, result, context=None):
+        d = self._construct_axes_dict(self._AXIS_ORDERS, copy=False)
         return self._constructor(result, **d).__finalize__(self)
 
     # ideally we would define this to avoid the getattr checks, but
@@ -1632,11 +1632,11 @@ class NDFrame(PandasObject):
                 continue
 
             # convert to an index if we are not a multi-selection
+            ax = self._get_axis(a)
             if level is None:
                 labels = _ensure_index(labels)
 
             axis = self._get_axis_number(a)
-            ax = self._get_axis(a)
             new_index, indexer = ax.reindex(
                 labels, level=level, limit=limit, method=method)
 
@@ -1663,7 +1663,7 @@ class NDFrame(PandasObject):
 
         Parameters
         ----------
-        index : array-like, optional
+        labels : array-like
             New labels / index to conform to. Preferably an Index object to
             avoid duplicating data
         axis : %(axes_single_arg)s
@@ -1910,6 +1910,24 @@ class NDFrame(PandasObject):
         f = lambda: self._data.is_datelike_mixed_type
         return self._protect_consolidate(f)
 
+    def _check_inplace_setting(self, value):
+        """ check whether we allow in-place setting with this type of value """
+
+        if self._is_mixed_type:
+            if not self._is_numeric_mixed_type:
+
+                # allow an actual np.nan thru
+                try:
+                    if np.isnan(value):
+                        return True
+                except:
+                    pass
+
+                raise TypeError(
+                    'Cannot do inplace boolean setting on mixed-types with a non np.nan value')
+
+        return True
+
     def _protect_consolidate(self, f):
         blocks_before = len(self._data.blocks)
         result = f()
@@ -1929,25 +1947,39 @@ class NDFrame(PandasObject):
 
     def as_matrix(self, columns=None):
         """
-        Convert the frame to its Numpy-array matrix representation. Columns
-        are presented in sorted order unless a specific list of columns is
-        provided.
+        Convert the frame to its Numpy-array representation.
 
-        NOTE: the dtype will be a lower-common-denominator dtype (implicit
-              upcasting) that is to say if the dtypes (even of numeric types)
-              are mixed, the one that accommodates all will be chosen use this
-              with care if you are not dealing with the blocks
-
-              e.g. if the dtypes are float16,float32         -> float32
-                                     float16,float32,float64 -> float64
-                                     int32,uint8             -> int32
-
+        Parameters
+        ----------
+        columns: list, optional, default:None
+            If None, return all columns, otherwise, returns specified columns.
 
         Returns
         -------
         values : ndarray
             If the caller is heterogeneous and contains booleans or objects,
-            the result will be of dtype=object
+            the result will be of dtype=object. See Notes.
+
+
+        Notes
+        -----
+        Return is NOT a Numpy-matrix, rather, a Numpy-array.
+
+        The dtype will be a lower-common-denominator dtype (implicit
+        upcasting); that is to say if the dtypes (even of numeric types)
+        are mixed, the one that accommodates all will be chosen. Use this
+        with care if you are not dealing with the blocks.
+
+        e.g. If the dtypes are float16 and float32, dtype will be upcast to
+        float32.  If dtypes are int32 and uint8, dtype will be upcase to
+        int32.
+
+        This method is provided for backwards compatibility. Generally,
+        it is recommended to use '.values'.
+
+        See Also
+        --------
+        pandas.DataFrame.values
         """
         self._consolidate_inplace()
         if self._AXIS_REVERSED:
@@ -1956,7 +1988,19 @@ class NDFrame(PandasObject):
 
     @property
     def values(self):
-        "Numpy representation of NDFrame"
+        """Numpy representation of NDFrame
+
+        Notes
+        -----
+        The dtype will be a lower-common-denominator dtype (implicit
+        upcasting); that is to say if the dtypes (even of numeric types)
+        are mixed, the one that accommodates all will be chosen. Use this
+        with care if you are not dealing with the blocks.
+
+        e.g. If the dtypes are float16 and float32, dtype will be upcast to
+        float32.  If dtypes are int32 and uint8, dtype will be upcase to
+        int32.
+        """
         return self.as_matrix()
 
     @property
@@ -2488,7 +2532,7 @@ class NDFrame(PandasObject):
 
         Parameters
         ----------
-        method : {'linear', 'time', 'values', 'index' 'nearest', 'zero',
+        method : {'linear', 'time', 'index', 'values', 'nearest', 'zero',
                   'slinear', 'quadratic', 'cubic', 'barycentric', 'krogh',
                   'polynomial', 'spline' 'piecewise_polynomial', 'pchip'}
 
@@ -2496,7 +2540,7 @@ class NDFrame(PandasObject):
               spaced. default
             * 'time': interpolation works on daily and higher resolution
               data to interpolate given length of interval
-            * 'index': use the actual numerical values of the index
+            * 'index', 'values': use the actual numerical values of the index
             * 'nearest', 'zero', 'slinear', 'quadratic', 'cubic',
               'barycentric', 'polynomial' is passed to
               `scipy.interpolate.interp1d` with the order given both
@@ -3188,6 +3232,8 @@ class NDFrame(PandasObject):
         if inplace:
             # we may have different type blocks come out of putmask, so
             # reconstruct the block manager
+
+            self._check_inplace_setting(other)
             new_data = self._data.putmask(mask=cond, new=other, align=axis is None,
                                           inplace=True)
             self._update_inplace(new_data)
@@ -3572,10 +3618,10 @@ class NDFrame(PandasObject):
                 return '%.1f%%' % x
 
         def describe_numeric_1d(series, percentiles):
-                return ([series.count(), series.mean(), series.std(),
-                         series.min()] +
-                        [series.quantile(x) for x in percentiles] +
-                        [series.max()])
+            return ([series.count(), series.mean(), series.std(),
+                     series.min()] +
+                    [series.quantile(x) for x in percentiles] +
+                    [series.max()])
 
         def describe_categorical_1d(data):
             names = ['count', 'unique']
@@ -3794,7 +3840,8 @@ equivalent of the ``numpy.ndarray`` method ``argmin``.""", nanops.nanmin)
 
         @Substitution(outname='variance',
                       desc="Return unbiased variance over requested "
-                           "axis\nNormalized by N-1")
+                           "axis.\n\nNormalized by N-1 by default. "
+                           "This can be changed using the ddof argument")
         @Appender(_num_doc)
         def var(self, axis=None, skipna=None, level=None, ddof=1, **kwargs):
             if skipna is None:
@@ -3811,7 +3858,8 @@ equivalent of the ``numpy.ndarray`` method ``argmin``.""", nanops.nanmin)
 
         @Substitution(outname='stdev',
                       desc="Return unbiased standard deviation over requested "
-                           "axis\nNormalized by N-1")
+                           "axis.\n\nNormalized by N-1 by default. "
+                           "This can be changed using the ddof argument")
         @Appender(_num_doc)
         def std(self, axis=None, skipna=None, level=None, ddof=1, **kwargs):
             if skipna is None:
@@ -3826,6 +3874,24 @@ equivalent of the ``numpy.ndarray`` method ``argmin``.""", nanops.nanmin)
                 return result.apply(np.sqrt)
             return np.sqrt(result)
         cls.std = std
+
+        @Substitution(outname='standarderror',
+                      desc="Return unbiased standard error of the mean over "
+                           "requested axis.\n\nNormalized by N-1 by default. "
+                           "This can be changed using the ddof argument")
+        @Appender(_num_doc)
+        def sem(self, axis=None, skipna=None, level=None, ddof=1, **kwargs):
+            if skipna is None:
+                skipna = True
+            if axis is None:
+                axis = self._stat_axis_number
+            if level is not None:
+                return self._agg_by_level('sem', axis=axis, level=level,
+                                          skipna=skipna, ddof=ddof)
+
+            return self._reduce(nanops.nansem, axis=axis, skipna=skipna,
+                                ddof=ddof)
+        cls.sem = sem
 
         @Substitution(outname='compounded',
                       desc="Return the compound percentage of the values for "

@@ -366,18 +366,23 @@ class Series(base.IndexOpsMixin, generic.NDFrame):
                                  index=self.index).__finalize__(self)
 
     def __array__(self, result=None):
-        """ the array interface, return my values """
+        """
+        the array interface, return my values
+        """
         return self.values
 
-    def __array_wrap__(self, result, copy=False):
+    def __array_wrap__(self, result, context=None):
         """
-        Gets called prior to a ufunc (and after)
+        Gets called after a ufunc
         """
         return self._constructor(result, index=self.index,
-                                 copy=copy).__finalize__(self)
+                                 copy=False).__finalize__(self)
 
-    def __contains__(self, key):
-        return key in self.index
+    def __array_prepare__(self, result, context=None):
+        """
+        Gets called prior to a ufunc
+        """
+        return result
 
     # complex
     @property
@@ -672,7 +677,7 @@ class Series(base.IndexOpsMixin, generic.NDFrame):
                 else:
                     return self._set_values(key, value)
             elif key_type == 'boolean':
-                    self._set_values(key.astype(np.bool_), value)
+                self._set_values(key.astype(np.bool_), value)
             else:
                 self._set_labels(key, value)
 
@@ -1940,7 +1945,7 @@ class Series(base.IndexOpsMixin, generic.NDFrame):
 
         if isinstance(arg, (dict, Series)):
             if isinstance(arg, dict):
-                arg = self._constructor(arg)
+                arg = self._constructor(arg, index=arg.keys())
 
             indexer = arg.index.get_indexer(values)
             new_values = com.take_1d(arg.values, indexer)
@@ -2369,8 +2374,6 @@ class Series(base.IndexOpsMixin, generic.NDFrame):
         if copy:
             new_values = new_values.copy()
 
-        if freq is None:
-            freq = self.index.freqstr or self.index.inferred_freq
         new_index = self.index.to_period(freq=freq)
         return self._constructor(new_values,
                                  index=new_index).__finalize__(self)

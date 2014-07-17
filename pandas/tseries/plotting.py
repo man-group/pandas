@@ -4,11 +4,7 @@ Pierre GF Gerard-Marchant & Matt Knox
 """
 
 #!!! TODO: Use the fact that axis can have units to simplify the process
-import datetime as pydt
-from datetime import datetime
-
 from matplotlib import pylab
-import matplotlib.units as units
 
 import numpy as np
 
@@ -21,6 +17,8 @@ import pandas.core.common as com
 
 from pandas.tseries.converter import (PeriodConverter, TimeSeries_DateLocator,
                                       TimeSeries_DateFormatter)
+
+from pandas.tools.plotting import _get_all_lines, _get_xlim
 
 #----------------------------------------------------------------------
 # Plotting functions and monkey patches
@@ -78,7 +76,7 @@ def tsplot(series, plotf, **kwargs):
 
     # set date formatter, locators and rescale limits
     format_dateaxis(ax, ax.freq)
-    left, right = _get_xlim(ax.get_lines())
+    left, right = _get_xlim(_get_all_lines(ax))
     ax.set_xlim(left, right)
 
     # x and y coord info
@@ -115,7 +113,7 @@ def _get_ax_freq(ax):
     if ax_freq is None:
         if hasattr(ax, 'left_ax'):
             ax_freq = getattr(ax.left_ax, 'freq', None)
-        if hasattr(ax, 'right_ax'):
+        elif hasattr(ax, 'right_ax'):
             ax_freq = getattr(ax.right_ax, 'freq', None)
     return ax_freq
 
@@ -219,14 +217,6 @@ def _get_freq(ax, series):
 
     return freq
 
-
-def _get_xlim(lines):
-    left, right = np.inf, -np.inf
-    for l in lines:
-        x = l.get_xdata()
-        left = min(x[0].ordinal, left)
-        right = max(x[-1].ordinal, right)
-    return left, right
 
 # Patch methods for subplot. Only format_dateaxis is currently used.
 # Do we need the rest for convenience?

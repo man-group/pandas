@@ -9,6 +9,7 @@ from pandas.core.api import Timestamp, Series
 from pandas.tslib import period_asfreq, period_ordinal
 from pandas.tseries.index import date_range
 from pandas.tseries.frequencies import get_freq
+import pandas.tseries.offsets as offsets
 from pandas import _np_version_under1p7
 import pandas.util.testing as tm
 from pandas.util.testing import assert_series_equal
@@ -61,7 +62,7 @@ class TestTimestamp(tm.TestCase):
             for unit in time_units:
                 self.assertRaises(
                     ValueError,
-                    tslib.Timestamp,
+                    Timestamp,
                     np.datetime64(date_string, dtype='M8[%s]' % unit)
                 )
 
@@ -72,27 +73,48 @@ class TestTimestamp(tm.TestCase):
 
         for date_string in in_bounds_dates:
             for unit in time_units:
-                tslib.Timestamp(
+                Timestamp(
                     np.datetime64(date_string, dtype='M8[%s]' % unit)
                 )
 
+    def test_tz(self):
+        t = '2014-02-01 09:00'
+        ts = Timestamp(t)
+        local = ts.tz_localize('Asia/Tokyo')
+        self.assertEqual(local.hour, 9)
+        self.assertEqual(local, Timestamp(t, tz='Asia/Tokyo'))
+        conv = local.tz_convert('US/Eastern')
+        self.assertEqual(conv,
+                         Timestamp('2014-01-31 19:00', tz='US/Eastern'))
+        self.assertEqual(conv.hour, 19)
+
+        # preserves nanosecond
+        ts = Timestamp(t) + offsets.Nano(5)
+        local = ts.tz_localize('Asia/Tokyo')
+        self.assertEqual(local.hour, 9)
+        self.assertEqual(local.nanosecond, 5)
+        conv = local.tz_convert('US/Eastern')
+        self.assertEqual(conv.nanosecond, 5)
+        self.assertEqual(conv.hour, 19)
+
     def test_barely_oob_dts(self):
-        one_us = np.timedelta64(1)
+        one_us = np.timedelta64(1).astype('timedelta64[us]')
 
         # By definition we can't go out of bounds in [ns], so we
         # convert the datetime64s to [us] so we can go out of bounds
-        min_ts_us = np.datetime64(tslib.Timestamp.min).astype('M8[us]')
-        max_ts_us = np.datetime64(tslib.Timestamp.max).astype('M8[us]')
+        min_ts_us = np.datetime64(Timestamp.min).astype('M8[us]')
+        max_ts_us = np.datetime64(Timestamp.max).astype('M8[us]')
 
         # No error for the min/max datetimes
-        tslib.Timestamp(min_ts_us)
-        tslib.Timestamp(max_ts_us)
+        Timestamp(min_ts_us)
+        Timestamp(max_ts_us)
 
         # One us less than the minimum is an error
-        self.assertRaises(ValueError, tslib.Timestamp, min_ts_us - one_us)
+        self.assertRaises(ValueError, Timestamp, min_ts_us - one_us)
 
         # One us more than the maximum is an error
-        self.assertRaises(ValueError, tslib.Timestamp, max_ts_us + one_us)
+        self.assertRaises(ValueError, Timestamp, max_ts_us + one_us)
+
 
 class TestDatetimeParsingWrappers(tm.TestCase):
     def test_does_not_convert_mixed_integer(self):
@@ -242,8 +264,7 @@ class TestArrayToDatetime(tm.TestCase):
 
 class TestTimestampNsOperations(tm.TestCase):
     def setUp(self):
-        if _np_version_under1p7:
-            raise nose.SkipTest('numpy >= 1.7 required')
+        tm._skip_if_not_numpy17_friendly()
         self.timestamp = Timestamp(datetime.datetime.utcnow())
 
     def assert_ns_timedelta(self, modified_timestamp, expected_value):
@@ -261,13 +282,47 @@ class TestTimestampNsOperations(tm.TestCase):
     def test_timedelta_us_arithmetic(self):
         self.assert_ns_timedelta(self.timestamp + np.timedelta64(-123, 'us'), -123000)
 
-    def test_timedelta_ns_arithmetic(self):
+    def test_timedelta_ms_arithmetic(self):
         time = self.timestamp + np.timedelta64(-123, 'ms')
         self.assert_ns_timedelta(time, -123000000)
 
     def test_nanosecond_string_parsing(self):
         self.timestamp = Timestamp('2013-05-01 07:15:45.123456789')
         self.assertEqual(self.timestamp.value, 1367392545123456000)
+
+    def test_nanosecond_timestamp(self):
+        # GH 7610
+        expected = 1293840000000000005
+        t = Timestamp('2011-01-01') + offsets.Nano(5)
+        self.assertEqual(repr(t), "Timestamp('2011-01-01 00:00:00.000000005')")
+        self.assertEqual(t.value, expected)
+        self.assertEqual(t.nanosecond, 5)
+
+        t = Timestamp(t)
+        self.assertEqual(repr(t), "Timestamp('2011-01-01 00:00:00.000000005')")
+        self.assertEqual(t.value, expected)
+        self.assertEqual(t.nanosecond, 5)
+
+        t = Timestamp(np.datetime64('2011-01-01 00:00:00.000000005Z'))
+        self.assertEqual(repr(t), "Timestamp('2011-01-01 00:00:00.000000005')")
+        self.assertEqual(t.value, expected)
+        self.assertEqual(t.nanosecond, 5)
+
+        expected = 1293840000000000010
+        t = t + offsets.Nano(5)
+        self.assertEqual(repr(t), "Timestamp('2011-01-01 00:00:00.000000010')")
+        self.assertEqual(t.value, expected)
+        self.assertEqual(t.nanosecond, 10)
+
+        t = Timestamp(t)
+        self.assertEqual(repr(t), "Timestamp('2011-01-01 00:00:00.000000010')")
+        self.assertEqual(t.value, expected)
+        self.assertEqual(t.nanosecond, 10)
+
+        t = Timestamp(np.datetime64('2011-01-01 00:00:00.000000010Z'))
+        self.assertEqual(repr(t), "Timestamp('2011-01-01 00:00:00.000000010')")
+        self.assertEqual(t.value, expected)
+        self.assertEqual(t.nanosecond, 10)
 
     def test_nat_arithmetic(self):
         # GH 6873
@@ -419,6 +474,17 @@ class TestTimestampOps(tm.TestCase):
             timedelta64_instance = np.timedelta64(1, 'D')
             self.assertEqual((timestamp_instance + timedelta64_instance).freq, original_freq)
             self.assertEqual((timestamp_instance - timedelta64_instance).freq, original_freq)
+
+    def test_resolution(self):
+
+        for freq, expected in zip(['A', 'Q', 'M', 'D', 'H', 'T', 'S', 'L', 'U'],
+                                  [tslib.D_RESO, tslib.D_RESO, tslib.D_RESO, tslib.D_RESO,
+                                   tslib.H_RESO, tslib.T_RESO,tslib.S_RESO, tslib.MS_RESO, tslib.US_RESO]):
+            for tz in [None, 'Asia/Tokyo', 'US/Eastern']:
+                idx = date_range(start='2013-04-01', periods=30, freq=freq, tz=tz)
+                result = tslib.resolution(idx.asi8, idx.tz)
+                self.assertEqual(result, expected)
+
 
 if __name__ == '__main__':
     nose.runmodule(argv=[__file__, '-vvs', '-x', '--pdb', '--pdb-failure'],

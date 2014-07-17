@@ -1,17 +1,15 @@
 # pylint: disable-msg=E1101,W0612
-from datetime import datetime, time, timedelta, tzinfo, date
+from datetime import datetime, timedelta, tzinfo, date
 import sys
 import os
-import unittest
 import nose
 
 import numpy as np
 import pytz
 
-from pandas import (Index, Series, TimeSeries, DataFrame, isnull,
-                    date_range, Timestamp)
+from pandas import (Index, Series, DataFrame, isnull, Timestamp)
 
-from pandas import DatetimeIndex, Int64Index, to_datetime, NaT
+from pandas import DatetimeIndex, to_datetime, NaT
 from pandas import tslib
 
 import pandas.core.datetools as datetools
@@ -20,31 +18,13 @@ from pandas.tseries.index import bdate_range, date_range
 import pandas.tseries.tools as tools
 from pytz import NonExistentTimeError
 
-from pandas.util.testing import assert_series_equal, assert_almost_equal, assertRaisesRegexp
 import pandas.util.testing as tm
 
-import pandas.lib as lib
-import pandas.core.datetools as dt
-from numpy.random import rand
 from pandas.util.testing import assert_frame_equal
-import pandas.compat as compat
-from pandas.compat import range, lrange, zip, cPickle as pickle
-from pandas.core.datetools import BDay
-import pandas.core.common as com
+from pandas.compat import lrange, zip
 
 from pandas import _np_version_under1p7
 
-def _skip_if_no_pytz():
-    try:
-        import pytz
-    except ImportError:
-        raise nose.SkipTest("pytz not installed")
-
-def _skip_if_no_dateutil():
-    try:
-        import dateutil
-    except ImportError:
-        raise nose.SkipTest
 
 try:
     import pytz
@@ -81,7 +61,7 @@ class TestTimeZoneSupportPytz(tm.TestCase):
     _multiprocess_can_split_ = True
 
     def setUp(self):
-        _skip_if_no_pytz()
+        tm._skip_if_no_pytz()
 
     def tz(self, tz):
         ''' Construct a timezone object from a string. Overridden in subclass to parameterize tests. '''
@@ -501,7 +481,7 @@ class TestTimeZoneSupportPytz(tm.TestCase):
         self.assertTrue(result.equals(expected))
 
     def test_take_dont_lose_meta(self):
-        _skip_if_no_pytz()
+        tm._skip_if_no_pytz()
         rng = date_range('1/1/2000', periods=20, tz=self.tzstr('US/Eastern'))
 
         result = rng.take(lrange(5))
@@ -544,13 +524,13 @@ class TestTimeZoneSupportPytz(tm.TestCase):
 
         result = ts_local.at_time(time(10, 0))
         expected = ts.at_time(time(10, 0)).tz_localize(self.tzstr('US/Eastern'))
-        assert_series_equal(result, expected)
+        tm.assert_series_equal(result, expected)
         self.assertTrue(self.cmptz(result.index.tz, self.tz('US/Eastern')))
 
         t1, t2 = time(10, 0), time(11, 0)
         result = ts_local.between_time(t1, t2)
         expected = ts.between_time(t1, t2).tz_localize(self.tzstr('US/Eastern'))
-        assert_series_equal(result, expected)
+        tm.assert_series_equal(result, expected)
         self.assertTrue(self.cmptz(result.index.tz, self.tz('US/Eastern')))
 
     def test_string_index_alias_tz_aware(self):
@@ -631,7 +611,7 @@ class TestTimeZoneSupportPytz(tm.TestCase):
                         'datetimes_with_tz' : datetimes_with_tz })
         result = df.get_dtype_counts()
         expected = Series({ 'datetime64[ns]' : 3, 'object' : 1 })
-        assert_series_equal(result, expected)
+        tm.assert_series_equal(result, expected)
 
     def test_hongkong_tz_convert(self):
         # #1673
@@ -767,11 +747,15 @@ class TestTimeZoneSupportDateutil(TestTimeZoneSupportPytz):
     _multiprocess_can_split_ = True
 
     def setUp(self):
-        _skip_if_no_dateutil()
+        tm._skip_if_no_dateutil()
 
     def tz(self, tz):
-        ''' Construct a timezone object from a string. Overridden in subclass to parameterize tests. '''
-        return dateutil.tz.gettz(tz)
+        '''
+        Construct a dateutil timezone.
+        Use tslib.maybe_get_tz so that we get the filename on the tz right
+        on windows. See #7337.
+        '''
+        return tslib.maybe_get_tz('dateutil/' + tz)
 
     def tzstr(self, tz):
         ''' Construct a timezone string from a string. Overridden in subclass to parameterize tests. '''
@@ -784,12 +768,43 @@ class TestTimeZoneSupportDateutil(TestTimeZoneSupportPytz):
     def localize(self, tz, x):
         return x.replace(tzinfo=tz)
 
+    def test_utc_with_system_utc(self):
+        if sys.platform == 'win32':
+            raise nose.SkipTest('Skipped on win32 due to dateutil bug.')
+
+        from pandas.tslib import maybe_get_tz
+
+        # from system utc to real utc
+        ts = Timestamp('2001-01-05 11:56', tz=maybe_get_tz('dateutil/UTC'))
+        # check that the time hasn't changed.
+        self.assertEqual(ts, ts.tz_convert(dateutil.tz.tzutc()))
+
+        # from system utc to real utc
+        ts = Timestamp('2001-01-05 11:56', tz=maybe_get_tz('dateutil/UTC'))
+        # check that the time hasn't changed.
+        self.assertEqual(ts, ts.tz_convert(dateutil.tz.tzutc()))
+
+
+class TestTimeZoneCacheKey(tm.TestCase):
+    def test_cache_keys_are_distinct_for_pytz_vs_dateutil(self):
+        tzs = pytz.common_timezones
+        for tz_name in tzs:
+            if tz_name == 'UTC':
+                # skip utc as it's a special case in dateutil
+                continue
+            tz_p = tslib.maybe_get_tz(tz_name)
+            tz_d = tslib.maybe_get_tz('dateutil/' + tz_name)
+            if tz_d is None:
+                # skip timezones that dateutil doesn't know about.
+                continue
+            self.assertNotEqual(tslib._p_tz_cache_key(tz_p), tslib._p_tz_cache_key(tz_d))
+
 
 class TestTimeZones(tm.TestCase):
     _multiprocess_can_split_ = True
 
     def setUp(self):
-        _skip_if_no_pytz()
+        tm._skip_if_no_pytz()
 
     def test_index_equals_with_tz(self):
         left = date_range('1/1/2011', periods=100, freq='H', tz='utc')
@@ -828,7 +843,7 @@ class TestTimeZones(tm.TestCase):
         # Can't localize if already tz-aware
         rng = date_range('1/1/2011', periods=100, freq='H', tz='utc')
         ts = Series(1, index=rng)
-        assertRaisesRegexp(TypeError, 'Already tz-aware', ts.tz_localize, 'US/Eastern')
+        tm.assertRaisesRegexp(TypeError, 'Already tz-aware', ts.tz_localize, 'US/Eastern')
 
     def test_series_frame_tz_convert(self):
         rng = date_range('1/1/2011', periods=200, freq='D',
@@ -852,7 +867,7 @@ class TestTimeZones(tm.TestCase):
         # can't convert tz-naive
         rng = date_range('1/1/2011', periods=200, freq='D')
         ts = Series(1, index=rng)
-        assertRaisesRegexp(TypeError, "Cannot convert tz-naive", ts.tz_convert, 'US/Eastern')
+        tm.assertRaisesRegexp(TypeError, "Cannot convert tz-naive", ts.tz_convert, 'US/Eastern')
 
     def test_join_utc_convert(self):
         rng = date_range('1/1/2011', periods=100, freq='H', tz='utc')
@@ -998,7 +1013,7 @@ class TestTimeZones(tm.TestCase):
         expected = uts1 + uts2
 
         self.assertEqual(result.index.tz, pytz.UTC)
-        assert_series_equal(result, expected)
+        tm.assert_series_equal(result, expected)
 
     def test_intersection(self):
         rng = date_range('1/1/2011', periods=100, freq='H', tz='utc')

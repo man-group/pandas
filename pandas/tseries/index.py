@@ -6,15 +6,15 @@ from datetime import timedelta
 
 import numpy as np
 
-from pandas.core.common import (isnull, _NS_DTYPE, _INT64_DTYPE,
-                                is_list_like,_values_from_object, _maybe_box,
-                                notnull, ABCSeries)
-from pandas.core.index import Index, Int64Index, _Identity, Float64Index
+from pandas.core.common import (_NS_DTYPE, _INT64_DTYPE,
+                                _values_from_object, _maybe_box,
+                                ABCSeries)
+from pandas.core.index import Index, Int64Index, Float64Index
 import pandas.compat as compat
 from pandas.compat import u
 from pandas.tseries.frequencies import (
     infer_freq, to_offset, get_period_alias,
-    Resolution, get_reso_string, get_offset)
+    Resolution, get_reso_string, _tz_convert_with_transitions)
 from pandas.core.base import DatetimeIndexOpsMixin
 from pandas.tseries.offsets import DateOffset, generate_range, Tick, CDay
 from pandas.tseries.tools import parse_time_string, normalize_date
@@ -29,7 +29,6 @@ import pandas.tslib as tslib
 import pandas.algos as _algos
 import pandas.index as _index
 
-from pandas.tslib import isleapyear
 
 def _utc():
     import pytz
@@ -49,8 +48,7 @@ def _field_accessor(name, field, docstring=None):
                     'is_quarter_start', 'is_quarter_end',
                     'is_year_start', 'is_year_end']:
             month_kw = self.freq.kwds.get('startingMonth', self.freq.kwds.get('month', 12)) if self.freq else 12
-            freqstr = self.freqstr if self.freq else None
-            return tslib.get_start_end_field(values, field, freqstr, month_kw)
+            return tslib.get_start_end_field(values, field, self.freqstr, month_kw)
         else:
             return tslib.get_date_field(values, field)
     f.__name__ = name
@@ -74,22 +72,35 @@ def _join_i8_wrapper(joinf, with_indexers=True):
     return wrapper
 
 
-def _dt_index_cmp(opname):
+def _dt_index_cmp(opname, nat_result=False):
     """
     Wrap comparison operations to convert datetime-like to datetime64
     """
     def wrapper(self, other):
         func = getattr(super(DatetimeIndex, self), opname)
-        if isinstance(other, datetime):
+        if isinstance(other, datetime) or isinstance(other, compat.string_types):
             other = _to_m8(other, tz=self.tz)
-        elif isinstance(other, list):
-            other = DatetimeIndex(other)
-        elif isinstance(other, compat.string_types):
-            other = _to_m8(other, tz=self.tz)
-        elif not isinstance(other, (np.ndarray, ABCSeries)):
-            other = _ensure_datetime64(other)
-        result = func(other)
+            result = func(other)
+            if com.isnull(other):
+                result.fill(nat_result)
+        else:
+            if isinstance(other, list):
+                other = DatetimeIndex(other)
+            elif not isinstance(other, (np.ndarray, ABCSeries)):
+                other = _ensure_datetime64(other)
+            result = func(other)
 
+            if isinstance(other, Index):
+                o_mask = other.values.view('i8') == tslib.iNaT
+            else:
+                o_mask = other.view('i8') == tslib.iNaT
+
+            if o_mask.any():
+                result[o_mask] = nat_result
+
+        mask = self.asi8 == tslib.iNaT
+        if mask.any():
+            result[mask] = nat_result
         return result.view(np.ndarray)
 
     return wrapper
@@ -142,7 +153,7 @@ class DatetimeIndex(DatetimeIndexOpsMixin, Int64Index):
     _arrmap = None
 
     __eq__ = _dt_index_cmp('__eq__')
-    __ne__ = _dt_index_cmp('__ne__')
+    __ne__ = _dt_index_cmp('__ne__', nat_result=True)
     __lt__ = _dt_index_cmp('__lt__')
     __gt__ = _dt_index_cmp('__gt__')
     __le__ = _dt_index_cmp('__le__')
@@ -439,8 +450,9 @@ class DatetimeIndex(DatetimeIndexOpsMixin, Int64Index):
 
         return index
 
-    def _box_values(self, values):
-        return lib.map_infer(values, lib.Timestamp)
+    @property
+    def _box_func(self):
+        return lambda x: Timestamp(x, offset=self.offset, tz=self.tz)
 
     def _local_timestamps(self):
         utc = _utc()
@@ -553,34 +565,11 @@ class DatetimeIndex(DatetimeIndexOpsMixin, Int64Index):
         from pandas.core.format import _is_dates_only
         return _is_dates_only(self.values)
 
-    def __unicode__(self):
+    @property
+    def _formatter_func(self):
         from pandas.core.format import _get_format_datetime64
-
         formatter = _get_format_datetime64(is_dates_only=self._is_dates_only)
-
-        values = self.values
-
-        freq = None
-        if self.offset is not None:
-            freq = self.offset.freqstr
-
-        summary = str(self.__class__)
-        if len(self) == 1:
-            first = formatter(values[0], tz=self.tz)
-            summary += '\n[%s]' % first
-        elif len(self) == 2:
-            first = formatter(values[0], tz=self.tz)
-            last = formatter(values[-1], tz=self.tz)
-            summary += '\n[%s, %s]' % (first, last)
-        elif len(self) > 2:
-            first = formatter(values[0], tz=self.tz)
-            last = formatter(values[-1], tz=self.tz)
-            summary += '\n[%s, ..., %s]' % (first, last)
-
-        tagline = '\nLength: %d, Freq: %s, Timezone: %s'
-        summary += tagline % (len(self), freq, self.tz)
-
-        return summary
+        return lambda x: formatter(x, tz=self.tz)
 
     def __reduce__(self):
         """Necessary for making this object picklable"""
@@ -660,7 +649,7 @@ class DatetimeIndex(DatetimeIndexOpsMixin, Int64Index):
 
     def _format_native_types(self, na_rep=u('NaT'),
                              date_format=None, **kwargs):
-        data = self._get_object_index()
+        data = self.asobject
         from pandas.core.format import Datetime64Formatter
         return Datetime64Formatter(values=data,
                                    nat_rep=na_rep,
@@ -765,27 +754,6 @@ class DatetimeIndex(DatetimeIndexOpsMixin, Int64Index):
             return self.asobject.values
         return self.values
 
-    @property
-    def asobject(self):
-        """
-        Convert to Index of datetime objects
-        """
-        if isnull(self).any():
-            msg = 'DatetimeIndex with NaT cannot be converted to object'
-            raise ValueError(msg)
-        return self._get_object_index()
-
-    def tolist(self):
-        """
-        See ndarray.tolist
-        """
-        return list(self.asobject)
-
-    def _get_object_index(self):
-        boxfunc = lambda x: Timestamp(x, offset=self.offset, tz=self.tz)
-        boxed_values = lib.map_infer(self.asi8, boxfunc)
-        return Index(boxed_values, dtype=object)
-
     def to_pydatetime(self):
         """
         Return DatetimeIndex as object ndarray of datetime.datetime objects
@@ -802,14 +770,16 @@ class DatetimeIndex(DatetimeIndexOpsMixin, Int64Index):
         """
         from pandas.tseries.period import PeriodIndex
 
-        if self.freq is None and freq is None:
-            msg = "You must pass a freq argument as current index has none."
-            raise ValueError(msg)
-
         if freq is None:
-            freq = get_period_alias(self.freqstr)
+            freq = self.freqstr or self.inferred_freq
 
-        return PeriodIndex(self.values, freq=freq, tz=self.tz)
+            if freq is None:
+                msg = "You must pass a freq argument as current index has none."
+                raise ValueError(msg)
+
+            freq = get_period_alias(freq)
+
+        return PeriodIndex(self.values, name=self.name, freq=freq, tz=self.tz)
 
     def order(self, return_indexer=False, ascending=True):
         """
@@ -900,9 +870,7 @@ class DatetimeIndex(DatetimeIndexOpsMixin, Int64Index):
         maybe_slice = lib.maybe_indices_to_slice(com._ensure_int64(indices))
         if isinstance(maybe_slice, slice):
             return self[maybe_slice]
-        indices = com._ensure_platform_int(indices)
-        taken = self.values.take(indices, axis=axis)
-        return self._simple_new(taken, self.name, None, self.tz)
+        return super(DatetimeIndex, self).take(indices, axis)
 
     def unique(self):
         """
@@ -1124,6 +1092,12 @@ class DatetimeIndex(DatetimeIndexOpsMixin, Int64Index):
         self.tz = getattr(obj, 'tz', None)
         self.name = getattr(obj, 'name', None)
         self._reset_identity()
+
+    def _wrap_union_result(self, other, result):
+        name = self.name if self.name == other.name else None
+        if self.tz != other.tz:
+            raise ValueError('Passed item and index have different timezone')
+        return self._simple_new(result, name=name, freq=None, tz=self.tz)
 
     def intersection(self, other):
         """
@@ -1402,7 +1376,10 @@ class DatetimeIndex(DatetimeIndexOpsMixin, Int64Index):
         else:
             if com._is_bool_indexer(key):
                 key = np.asarray(key)
-                key = lib.maybe_booleans_to_slice(key.view(np.uint8))
+                if key.all():
+                    key = slice(0,None,None)
+                else:
+                    key = lib.maybe_booleans_to_slice(key.view(np.uint8))
 
             new_offset = None
             if isinstance(key, slice):
@@ -1444,6 +1421,8 @@ class DatetimeIndex(DatetimeIndexOpsMixin, Int64Index):
     @property
     def freqstr(self):
         """ return the frequency object as a string if its set, otherwise None """
+        if self.freq is None:
+            return None
         return self.offset.freqstr
 
     _year = _field_accessor('year', 'Y')
@@ -1498,7 +1477,7 @@ class DatetimeIndex(DatetimeIndexOpsMixin, Int64Index):
                              tz=self.tz)
 
     def __iter__(self):
-        return iter(self._get_object_index())
+        return iter(self.asobject)
 
     def searchsorted(self, key, side='left'):
         if isinstance(key, np.ndarray):
@@ -1594,19 +1573,61 @@ class DatetimeIndex(DatetimeIndexOpsMixin, Int64Index):
         -------
         new_index : Index
         """
+
+        freq = None
         if isinstance(item, datetime):
+            zone = tslib.get_timezone(self.tz)
+            izone = tslib.get_timezone(getattr(item, 'tzinfo', None))
+            if zone != izone:
+                raise ValueError('Passed item and index have different timezone')
+            # check freq can be preserved on edge cases
+            if self.freq is not None:
+                if (loc == 0 or loc == -len(self)) and item + self.freq == self[0]:
+                    freq = self.freq
+                elif (loc == len(self)) and item - self.freq == self[-1]:
+                    freq = self.freq
             item = _to_m8(item, tz=self.tz)
         try:
-            new_index = np.concatenate((self[:loc].asi8,
-                                    [item.view(np.int64)],
-                                    self[loc:].asi8))
-            return DatetimeIndex(new_index, freq='infer')
+            new_dates = np.concatenate((self[:loc].asi8, [item.view(np.int64)],
+                                        self[loc:].asi8))
+            if self.tz is not None:
+                new_dates = _tz_convert_with_transitions(new_dates,'UTC',self.tz)
+            return DatetimeIndex(new_dates, name=self.name, freq=freq, tz=self.tz)
+
         except (AttributeError, TypeError):
 
             # fall back to object index
             if isinstance(item,compat.string_types):
                 return self.asobject.insert(loc, item)
             raise TypeError("cannot insert DatetimeIndex with incompatible label")
+
+    def delete(self, loc):
+        """
+        Make new DatetimeIndex with passed location deleted
+        Returns
+
+        loc: int, slice or array of ints
+            Indicate which sub-arrays to remove.
+
+        -------
+        new_index : DatetimeIndex
+        """
+        new_dates = np.delete(self.asi8, loc)
+
+        freq = None
+        if lib.is_integer(loc):
+            if loc in (0, -len(self), -1, len(self) - 1):
+                freq = self.freq
+        else:
+            if com.is_list_like(loc):
+                loc = lib.maybe_indices_to_slice(com._ensure_int64(np.array(loc)))
+            if isinstance(loc, slice) and loc.step in (1, None):
+                if (loc.start in (0, None) or loc.stop in (len(self), None)):
+                    freq = self.freq
+
+        if self.tz is not None:
+            new_dates = _tz_convert_with_transitions(new_dates, 'UTC', self.tz)
+        return DatetimeIndex(new_dates, name=self.name, freq=freq, tz=self.tz)
 
     def _view_like(self, ndarray):
         result = ndarray.view(type(self))
@@ -1742,34 +1763,6 @@ class DatetimeIndex(DatetimeIndexOpsMixin, Int64Index):
                        rop(time_micros, end_micros))
 
         return mask.nonzero()[0]
-
-    def min(self, axis=None):
-        """
-        Overridden ndarray.min to return a Timestamp
-        """
-        mask = self.asi8 == tslib.iNaT
-        masked = self[~mask]
-        if len(masked) == 0:
-            return tslib.NaT
-        elif self.is_monotonic:
-            return masked[0]
-        else:
-            min_stamp = masked.asi8.min()
-            return Timestamp(min_stamp, tz=self.tz)
-
-    def max(self, axis=None):
-        """
-        Overridden ndarray.max to return a Timestamp
-        """
-        mask = self.asi8 == tslib.iNaT
-        masked = self[~mask]
-        if len(masked) == 0:
-            return tslib.NaT
-        elif self.is_monotonic:
-            return masked[-1]
-        else:
-            max_stamp = masked.asi8.max()
-            return Timestamp(max_stamp, tz=self.tz)
 
     def to_julian_date(self):
         """

@@ -72,6 +72,7 @@ class TestMultiLevel(tm.TestCase):
         tm.assert_series_equal(result, self.frame['A'])
 
     def test_append_index(self):
+        tm._skip_if_no_pytz()
 
         idx1 = Index([1.1, 1.2, 1.3])
         idx2 = pd.date_range('2011-01-01', freq='D', periods=3, tz='Asia/Tokyo')
@@ -81,17 +82,18 @@ class TestMultiLevel(tm.TestCase):
         midx_lv3 = MultiIndex.from_arrays([idx1, idx2, idx3])
 
         result = idx1.append(midx_lv2)
-        expected = Index([1.1, 1.2, 1.3,
-                         (1.1, datetime.datetime(2010, 12, 31, 15, 0)),
-                         (1.2, datetime.datetime(2011, 1, 1, 15, 0)),
-                         (1.3, datetime.datetime(2011, 1, 2, 15, 0))])
+
+        # GH 7112
+        import pytz
+        tz = pytz.timezone('Asia/Tokyo')
+        expected_tuples = [(1.1, datetime.datetime(2011, 1, 1, tzinfo=tz)),
+                           (1.2, datetime.datetime(2011, 1, 2, tzinfo=tz)),
+                           (1.3, datetime.datetime(2011, 1, 3, tzinfo=tz))]
+        expected = Index([1.1, 1.2, 1.3] + expected_tuples)
         self.assert_(result.equals(expected))
 
         result = midx_lv2.append(idx1)
-        expected = Index([(1.1, datetime.datetime(2010, 12, 31, 15, 0)),
-                          (1.2, datetime.datetime(2011, 1, 1, 15, 0)),
-                          (1.3, datetime.datetime(2011, 1, 2, 15, 0)),
-                           1.1, 1.2, 1.3])
+        expected = Index(expected_tuples + [1.1, 1.2, 1.3])
         self.assert_(result.equals(expected))
 
         result = midx_lv2.append(midx_lv2)
@@ -103,12 +105,10 @@ class TestMultiLevel(tm.TestCase):
 
         result = midx_lv3.append(midx_lv2)
         expected = Index._simple_new(
-            np.array([(1.1, datetime.datetime(2010, 12, 31, 15, 0), 'A'),
-                      (1.2, datetime.datetime(2011, 1, 1, 15, 0), 'B'),
-                      (1.3, datetime.datetime(2011, 1, 2, 15, 0), 'C'),
-                      (1.1, datetime.datetime(2010, 12, 31, 15, 0)),
-                      (1.2, datetime.datetime(2011, 1, 1, 15, 0)),
-                      (1.3, datetime.datetime(2011, 1, 2, 15, 0))]), None)
+            np.array([(1.1, datetime.datetime(2011, 1, 1, tzinfo=tz), 'A'),
+                      (1.2, datetime.datetime(2011, 1, 2, tzinfo=tz), 'B'),
+                      (1.3, datetime.datetime(2011, 1, 3, tzinfo=tz), 'C')]
+                      + expected_tuples), None)
         self.assert_(result.equals(expected))
 
     def test_dataframe_constructor(self):
@@ -1378,7 +1378,7 @@ Thur,Lunch,Yes,51.51,17"""
         self.assertRaises(KeyError, frame.count, level='x')
 
     AGG_FUNCTIONS = ['sum', 'prod', 'min', 'max', 'median', 'mean', 'skew',
-                     'mad', 'std', 'var']
+                     'mad', 'std', 'var', 'sem']
 
     def test_series_group_min_max(self):
         for op, level, skipna in cart_product(self.AGG_FUNCTIONS,
@@ -2077,6 +2077,46 @@ Thur,Lunch,Yes,51.51,17"""
         self.assertTrue(df.index.get_level_values(0).equals(idx1))
         self.assertTrue(df.index.get_level_values(1).equals(idx2))
         self.assertTrue(df.index.get_level_values(2).equals(idx3))
+
+    def test_reset_index_datetime(self):
+        # GH 3950
+        for tz in ['UTC', 'Asia/Tokyo', 'US/Eastern']:
+            idx1 = pd.date_range('1/1/2011', periods=5, freq='D', tz=tz, name='idx1')
+            idx2 = pd.Index(range(5), name='idx2',dtype='int64')
+            idx = pd.MultiIndex.from_arrays([idx1, idx2])
+            df = pd.DataFrame({'a': np.arange(5,dtype='int64'), 'b': ['A', 'B', 'C', 'D', 'E']}, index=idx) 
+
+            expected = pd.DataFrame({'idx1': [datetime.datetime(2011, 1, 1),
+                                              datetime.datetime(2011, 1, 2),
+                                              datetime.datetime(2011, 1, 3),
+                                              datetime.datetime(2011, 1, 4),
+                                              datetime.datetime(2011, 1, 5)], 
+                                     'idx2': np.arange(5,dtype='int64'),
+                                     'a': np.arange(5,dtype='int64'), 'b': ['A', 'B', 'C', 'D', 'E']},
+                                     columns=['idx1', 'idx2', 'a', 'b'])
+            expected['idx1'] = expected['idx1'].apply(lambda d: pd.Timestamp(d, tz=tz))
+            assert_frame_equal(df.reset_index(), expected)
+
+            idx3 = pd.date_range('1/1/2012', periods=5, freq='MS', tz='Europe/Paris', name='idx3')
+            idx = pd.MultiIndex.from_arrays([idx1, idx2, idx3])
+            df = pd.DataFrame({'a': np.arange(5,dtype='int64'), 'b': ['A', 'B', 'C', 'D', 'E']}, index=idx) 
+
+            expected = pd.DataFrame({'idx1': [datetime.datetime(2011, 1, 1),
+                                              datetime.datetime(2011, 1, 2),
+                                              datetime.datetime(2011, 1, 3),
+                                              datetime.datetime(2011, 1, 4),
+                                              datetime.datetime(2011, 1, 5)], 
+                                     'idx2': np.arange(5,dtype='int64'),
+                                     'idx3': [datetime.datetime(2012, 1, 1),
+                                              datetime.datetime(2012, 2, 1),
+                                              datetime.datetime(2012, 3, 1),
+                                              datetime.datetime(2012, 4, 1),
+                                              datetime.datetime(2012, 5, 1)], 
+                                     'a': np.arange(5,dtype='int64'), 'b': ['A', 'B', 'C', 'D', 'E']},
+                                     columns=['idx1', 'idx2', 'idx3', 'a', 'b'])
+            expected['idx1'] = expected['idx1'].apply(lambda d: pd.Timestamp(d, tz=tz))
+            expected['idx3'] = expected['idx3'].apply(lambda d: pd.Timestamp(d, tz='Europe/Paris'))
+            assert_frame_equal(df.reset_index(), expected)
 
     def test_set_index_period(self):
         # GH 6631

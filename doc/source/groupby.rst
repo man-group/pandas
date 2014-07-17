@@ -397,7 +397,7 @@ index are the group names and whose values are the sizes of each group.
    named *columns*.
 
    Aggregating functions are ones that reduce the dimension of the returned objects,
-   for example: ``mean, sum, size, count, std, var, describe, first, last, nth, min, max``. This is
+   for example: ``mean, sum, size, count, std, var, sem, describe, first, last, nth, min, max``. This is
    what happens when you do for example ``DataFrame.sum()`` and get back a ``Series``.
 
    ``nth`` can act as a reducer *or* a filter, see :ref:`here <groupby.nth>`
@@ -457,7 +457,7 @@ must be either implemented on GroupBy or available via :ref:`dispatching
 Cython-optimized aggregation functions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Some common aggregations, currently only ``sum``, ``mean``, and ``std``, have
+Some common aggregations, currently only ``sum``, ``mean``, ``std``, and ``sem``, have
 optimized Cython implementations:
 
 .. ipython:: python
@@ -663,6 +663,18 @@ next). This enables some operations to be carried out rather succinctly:
 In this example, we chopped the collection of time series into yearly chunks
 then independently called :ref:`fillna <missing_data.fillna>` on the
 groups.
+
+.. versionadded:: 0.14.1
+
+The ``nlargest`` and ``nsmallest`` methods work on ``Series`` style groupbys:
+
+.. ipython:: python
+
+   s = Series([9, 8, 7, 5, 19, 1, 4.2, 3.3])
+   g = Series(list('abababab'))
+   gb = s.groupby(g)
+   gb.nlargest(3)
+   gb.nsmallest(3)
 
 .. _groupby.apply:
 

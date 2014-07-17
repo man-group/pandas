@@ -30,20 +30,40 @@ class FreqGroup(object):
 
 class Resolution(object):
 
-    RESO_US = 0
-    RESO_SEC = 1
-    RESO_MIN = 2
-    RESO_HR = 3
-    RESO_DAY = 4
+    RESO_US = tslib.US_RESO
+    RESO_MS = tslib.MS_RESO
+    RESO_SEC = tslib.S_RESO
+    RESO_MIN = tslib.T_RESO
+    RESO_HR = tslib.H_RESO
+    RESO_DAY = tslib.D_RESO
+
+    _reso_str_map = {
+    RESO_US: 'microsecond',
+    RESO_MS: 'millisecond',
+    RESO_SEC: 'second',
+    RESO_MIN: 'minute',
+    RESO_HR: 'hour',
+    RESO_DAY: 'day'}
+
+    _reso_period_map = {
+    'year': 'A',
+    'quarter': 'Q',
+    'month': 'M',
+    'day': 'D',
+    'hour': 'H',
+    'minute': 'T',
+    'second': 'S',
+    'millisecond': 'L',
+    'microsecond': 'U',
+    'nanosecond': 'N'}
 
     @classmethod
     def get_str(cls, reso):
-        return {cls.RESO_US: 'microsecond',
-                cls.RESO_SEC: 'second',
-                cls.RESO_MIN: 'minute',
-                cls.RESO_HR: 'hour',
-                cls.RESO_DAY: 'day'}.get(reso, 'day')
+        return cls._reso_str_map.get(reso, 'day')
 
+    @classmethod
+    def get_freq(cls, resostr):
+        return cls._reso_period_map[resostr]
 
 def get_reso_string(reso):
     return Resolution.get_str(reso)
@@ -571,22 +591,9 @@ def _period_alias_dictionary():
 
     return alias_dict
 
-_reso_period_map = {
-    "year": "A",
-    "quarter": "Q",
-    "month": "M",
-    "day": "D",
-    "hour": "H",
-    "minute": "T",
-    "second": "S",
-    "millisecond": "L",
-    "microsecond": "U",
-    "nanosecond": "N",
-}
-
 
 def _infer_period_group(freqstr):
-    return _period_group(_reso_period_map[freqstr])
+    return _period_group(Resolution._reso_period_map[freqstr])
 
 
 def _period_group(freqstr):
@@ -599,7 +606,7 @@ _period_alias_dict = _period_alias_dictionary()
 def _period_str_to_code(freqstr):
     # hack
     freqstr = _rule_aliases.get(freqstr, freqstr)
-    
+
     if freqstr not in _dont_uppercase:
         freqstr = _rule_aliases.get(freqstr.lower(), freqstr)
 
@@ -659,6 +666,25 @@ _ONE_MINUTE = 60 * _ONE_SECOND
 _ONE_HOUR = 60 * _ONE_MINUTE
 _ONE_DAY = 24 * _ONE_HOUR
 
+def _tz_convert_with_transitions(values, to_tz, from_tz):
+    """
+    convert i8 values from the specificed timezone to the to_tz zone, taking
+    into account DST transitions
+    """
+
+    # vectorization is slow, so tests if we can do this via the faster tz_convert
+    f = lambda x: tslib.tz_convert_single(x, to_tz, from_tz)
+
+    if len(values) > 2:
+        first_slow, last_slow = f(values[0]),f(values[-1])
+
+        first_fast, last_fast = tslib.tz_convert(np.array([values[0],values[-1]],dtype='i8'),to_tz,from_tz)
+
+        # don't cross a DST, so ok
+        if first_fast == first_slow and last_fast == last_slow:
+            return tslib.tz_convert(values,to_tz,from_tz)
+
+    return np.vectorize(f)(values)
 
 class _FrequencyInferer(object):
     """
@@ -668,8 +694,9 @@ class _FrequencyInferer(object):
     def __init__(self, index, warn=True):
         self.index = index
         self.values = np.asarray(index).view('i8')
+
         if index.tz is not None:
-            self.values = tslib.date_normalize(self.values, index.tz)
+            self.values = _tz_convert_with_transitions(self.values,'UTC',index.tz)
 
         self.warn = warn
 

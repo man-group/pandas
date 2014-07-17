@@ -23,7 +23,7 @@ from numpy.random import randn, rand
 import numpy as np
 
 import pandas as pd
-from pandas.core.common import _is_sequence
+from pandas.core.common import _is_sequence, array_equivalent
 import pandas.core.index as index
 import pandas.core.series as series
 import pandas.core.frame as frame
@@ -41,7 +41,8 @@ from pandas import bdate_range
 from pandas.tseries.index import DatetimeIndex
 from pandas.tseries.period import PeriodIndex
 
-from pandas import _testing
+from pandas import _testing, _np_version_under1p7
+
 
 from pandas.io.common import urlopen
 
@@ -86,9 +87,30 @@ class TestCase(unittest.TestCase):
         pd.reset_option('^display.',silent=True)
 
     def assert_numpy_array_equal(self, np_array, assert_equal):
+        """Checks that 'np_array' is equal to 'assert_equal'
+
+        Note that the expected array should not contain `np.nan`! Two numpy arrays are equal if all
+        elements are equal, which is not possible if `np.nan` is such an element!
+
+        If the expected array includes `np.nan` use `assert_numpy_array_equivalent(...)`.
+        """
         if np.array_equal(np_array, assert_equal):
-	        return
+            return
         raise AssertionError('{0} is not equal to {1}.'.format(np_array, assert_equal))
+
+    def assert_numpy_array_equivalent(self, np_array, assert_equal):
+        """Checks that 'np_array' is equivalent to 'assert_equal'
+
+        Two numpy arrays are equivalent if the arrays have equal non-NaN elements, and
+        `np.nan` in corresponding locations.
+
+        If the the expected array does not contain `np.nan` `assert_numpy_array_equivalent` is the
+        similar to `assert_numpy_array_equal()`. If the expected array includes `np.nan` use this
+        function.
+        """
+        if array_equivalent(np_array, assert_equal):
+            return
+        raise AssertionError('{0} is not equivalent to {1}.'.format(np_array, assert_equal))
 
     def assertIs(self, first, second, msg=''):
         """Checks that 'first' is 'second'"""
@@ -187,6 +209,47 @@ def mplskip(cls):
 
     cls.setUpClass = setUpClass
     return cls
+
+def _skip_if_not_numpy17_friendly():
+    # not friendly for < 1.7
+    if _np_version_under1p7:
+        import nose
+        raise nose.SkipTest("numpy >= 1.7 is required")
+
+def _skip_if_no_scipy():
+    try:
+        import scipy.stats
+    except ImportError:
+        import nose
+        raise nose.SkipTest("no scipy.stats module")
+    try:
+        import scipy.interpolate
+    except ImportError:
+        import nose
+        raise nose.SkipTest('scipy.interpolate missing')
+
+
+def _skip_if_no_pytz():
+    try:
+        import pytz
+    except ImportError:
+        import nose
+        raise nose.SkipTest("pytz not installed")
+
+
+def _skip_if_no_dateutil():
+    try:
+        import dateutil
+    except ImportError:
+        import nose
+        raise nose.SkipTest("dateutil not installed")
+
+
+def _skip_if_no_cday():
+    from pandas.core.datetools import cday
+    if cday is None:
+        import nose
+        raise nose.SkipTest("CustomBusinessDay not available.")
 
 
 #------------------------------------------------------------------------------
@@ -1132,6 +1195,8 @@ _network_error_messages = (
     'HTTP Error 502',
     'HTTP Error 503',
     'HTTP Error 403',
+    'Temporary failure in name resolution',
+    'Name or service not known',
     )
 
 # or this e.errno/e.reason.errno

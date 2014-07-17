@@ -172,6 +172,27 @@ def infer_dtype_list(list values):
     pass
 
 
+def is_possible_datetimelike_array(object arr):
+    # determine if we have a possible datetimelike (or null-like) array
+    cdef:
+        Py_ssize_t i, n = len(arr)
+        bint seen_timedelta = 0, seen_datetime = 0
+        object v
+
+    for i in range(n):
+        v = arr[i]
+        if util.is_string_object(v):
+           continue
+        elif util._checknull(v):
+           continue
+        elif is_datetime(v):
+           seen_datetime=1
+        elif is_timedelta(v):
+           seen_timedelta=1
+        else:
+           return False
+    return seen_datetime or seen_timedelta
+
 cdef inline bint is_null_datetimelike(v):
     # determine if we have a null for a timedelta/datetime (or integer versions)x
     if util._checknull(v):
@@ -331,61 +352,84 @@ def is_unicode_array(ndarray values):
 
 
 def is_datetime_array(ndarray[object] values):
-    cdef int i, n = len(values)
+    cdef int i, null_count = 0, n = len(values)
     cdef object v
     if n == 0:
         return False
+
+    # return False for all nulls
     for i in range(n):
         v = values[i]
-        if not (is_datetime(v) or is_null_datetimelike(v)):
+        if is_null_datetimelike(v):
+            # we are a regular null
+            if util._checknull(v):
+               null_count += 1
+        elif not is_datetime(v):
             return False
-    return True
-
+    return null_count != n
 
 def is_datetime64_array(ndarray values):
-    cdef int i, n = len(values)
+    cdef int i, null_count = 0, n = len(values)
     cdef object v
     if n == 0:
         return False
+
+    # return False for all nulls
     for i in range(n):
         v = values[i]
-        if not (util.is_datetime64_object(v) or is_null_datetimelike(v)):
+        if is_null_datetimelike(v):
+            # we are a regular null
+            if util._checknull(v):
+                null_count += 1
+        elif not util.is_datetime64_object(v):
             return False
-    return True
+    return null_count != n
 
 def is_timedelta_array(ndarray values):
-    cdef int i, n = len(values)
+    cdef int i, null_count = 0, n = len(values)
     cdef object v
     if n == 0:
         return False
     for i in range(n):
         v = values[i]
-        if not (PyDelta_Check(v) or is_null_datetimelike(v)):
+        if is_null_datetimelike(v):
+            # we are a regular null
+            if util._checknull(v):
+                null_count += 1
+        elif not PyDelta_Check(v):
             return False
-    return True
+    return null_count != n
 
 def is_timedelta64_array(ndarray values):
-    cdef int i, n = len(values)
+    cdef int i, null_count = 0, n = len(values)
     cdef object v
     if n == 0:
         return False
     for i in range(n):
         v = values[i]
-        if not (util.is_timedelta64_object(v) or is_null_datetimelike(v)):
+        if is_null_datetimelike(v):
+            # we are a regular null
+            if util._checknull(v):
+                null_count += 1
+        elif not util.is_timedelta64_object(v):
             return False
-    return True
+    return null_count != n
 
 def is_timedelta_or_timedelta64_array(ndarray values):
     """ infer with timedeltas and/or nat/none """
-    cdef int i, n = len(values)
+    cdef int i, null_count = 0, n = len(values)
     cdef object v
     if n == 0:
         return False
     for i in range(n):
         v = values[i]
-        if not (is_timedelta(v) or is_null_datetimelike(v)):
+        if is_null_datetimelike(v):
+            # we are a regular null
+            if util._checknull(v):
+                null_count += 1
+        elif not is_timedelta(v):
             return False
-    return True
+    return null_count != n
 
 def is_date_array(ndarray[object] values):
     cdef int i, n = len(values)
@@ -427,86 +471,91 @@ cdef extern from "parse_helper.h":
 cdef double fINT64_MAX = <double> INT64_MAX
 cdef double fINT64_MIN = <double> INT64_MIN
 
-def maybe_convert_numeric(ndarray[object] values, set na_values,
-                          convert_empty=True, coerce_numeric=False):
+
+def maybe_convert_numeric(object[:] values, set na_values,
+                          bint convert_empty=True, bint coerce_numeric=False):
     '''
     Type inference function-- convert strings to numeric (potentially) and
     convert to proper dtype array
     '''
     cdef:
         int status
-        Py_ssize_t i, n
-        ndarray[float64_t] floats
-        ndarray[complex128_t] complexes
-        ndarray[int64_t] ints
-        bint seen_float = 0
-        bint seen_complex = 0
+        Py_ssize_t i, n = values.size
+        ndarray[float64_t] floats = np.empty(n, dtype='f8')
+        ndarray[complex128_t] complexes = np.empty(n, dtype='c16')
+        ndarray[int64_t] ints = np.empty(n, dtype='i8')
+        ndarray[uint8_t] bools = np.empty(n, dtype='u1')
+        bint seen_float = False
+        bint seen_complex = False
+        bint seen_int = False
+        bint seen_bool = False
         object val
         float64_t fval
 
-    n = len(values)
-
-    floats = np.empty(n, dtype='f8')
-    complexes = np.empty(n, dtype='c16')
-    ints = np.empty(n, dtype='i8')
-
-    for i from 0 <= i < n:
+    for i in range(n):
         val = values[i]
 
         if val in na_values:
             floats[i] = complexes[i] = nan
-            seen_float = 1
+            seen_float = True
         elif util.is_float_object(val):
             floats[i] = complexes[i] = val
-            seen_float = 1
+            seen_float = True
         elif util.is_integer_object(val):
             floats[i] = ints[i] = val
-            seen_int = 1
+            seen_int = True
+        elif util.is_bool_object(val):
+            floats[i] = ints[i] = bools[i] = val
+            seen_bool = True
         elif val is None:
             floats[i] = complexes[i] = nan
-            seen_float = 1
-        elif hasattr(val,'__len__') and len(val) == 0:
+            seen_float = True
+        elif hasattr(val, '__len__') and len(val) == 0:
             if convert_empty or coerce_numeric:
                 floats[i] = complexes[i] = nan
-                seen_float = 1
+                seen_float = True
             else:
                 raise ValueError('Empty string encountered')
         elif util.is_complex_object(val):
             complexes[i] = val
-            seen_complex = 1
+            seen_complex = True
         else:
             try:
                 status = floatify(val, &fval)
                 floats[i] = fval
                 if not seen_float:
                     if '.' in val or fval == INF or fval == NEGINF:
-                        seen_float = 1
+                        seen_float = True
                     elif 'inf' in val:  # special case to handle +/-inf
-                        seen_float = 1
+                        seen_float = True
                     elif fval < fINT64_MAX and fval > fINT64_MIN:
                         try:
                             ints[i] = int(val)
                         except ValueError:
                             ints[i] = <int64_t> fval
                     else:
-                        seen_float = 1
+                        seen_float = True
             except:
                 if not coerce_numeric:
                     raise
 
                 floats[i] = nan
-                seen_float = 1
-
+                seen_float = True
 
     if seen_complex:
         return complexes
     elif seen_float:
         return floats
-    else:
+    elif seen_int:
         return ints
+    elif seen_bool:
+        return bools.view(np.bool_)
+    return ints
+
 
 def maybe_convert_objects(ndarray[object] objects, bint try_float=0,
-                          bint safe=0, bint convert_datetime=0, bint convert_timedelta=0):
+                          bint safe=0, bint convert_datetime=0,
+                          bint convert_timedelta=0):
     '''
     Type inference function-- convert object array to proper dtype
     '''

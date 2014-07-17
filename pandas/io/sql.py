@@ -29,6 +29,37 @@ class DatabaseError(IOError):
 #------------------------------------------------------------------------------
 # Helper functions
 
+_SQLALCHEMY_INSTALLED = None
+
+def _is_sqlalchemy_engine(con):
+    global _SQLALCHEMY_INSTALLED
+    if _SQLALCHEMY_INSTALLED is None:
+        try:
+            import sqlalchemy
+            _SQLALCHEMY_INSTALLED = True
+            
+            from distutils.version import LooseVersion
+            ver = LooseVersion(sqlalchemy.__version__)
+            # For sqlalchemy versions < 0.8.2, the BIGINT type is recognized
+            # for a sqlite engine, which results in a warning when trying to
+            # read/write a DataFrame with int64 values. (GH7433)
+            if ver < '0.8.2':
+                from sqlalchemy import BigInteger
+                from sqlalchemy.ext.compiler import compiles
+        
+                @compiles(BigInteger, 'sqlite')
+                def compile_big_int_sqlite(type_, compiler, **kw):
+                    return 'INTEGER'
+        except ImportError:
+            _SQLALCHEMY_INSTALLED = False
+
+    if _SQLALCHEMY_INSTALLED:
+        import sqlalchemy
+        return isinstance(con, sqlalchemy.engine.Engine)
+    else:
+        return False
+
+
 def _convert_params(sql, params):
     """convert sql and params args to DBAPI2.0 compliant format"""
     args = [sql]
@@ -88,7 +119,7 @@ def execute(sql, con, cur=None, params=None):
         Using SQLAlchemy makes it possible to use any DB supported by that
         library.
         If a DBAPI2 object, only sqlite3 is supported.
-    cur : depreciated, cursor is obtained from connection
+    cur : deprecated, cursor is obtained from connection
     params : list or tuple, optional
         List of parameters to pass to execute method.
 
@@ -134,7 +165,7 @@ def tquery(sql, con=None, cur=None, retry=True):
     sql: string
         SQL query to be executed
     con: DBAPI2 connection
-    cur: depreciated, cursor is obtained from connection
+    cur: deprecated, cursor is obtained from connection
 
     Returns
     -------
@@ -142,7 +173,7 @@ def tquery(sql, con=None, cur=None, retry=True):
 
     """
     warnings.warn(
-        "tquery is depreciated, and will be removed in future versions. "
+        "tquery is deprecated, and will be removed in future versions. "
         "You can use ``execute(...).fetchall()`` instead.",
         FutureWarning)
 
@@ -187,7 +218,7 @@ def uquery(sql, con=None, cur=None, retry=True, params=None):
     sql: string
         SQL query to be executed
     con: DBAPI2 connection
-    cur: depreciated, cursor is obtained from connection
+    cur: deprecated, cursor is obtained from connection
     params: list or tuple, optional
         List of parameters to pass to execute method.
 
@@ -197,7 +228,7 @@ def uquery(sql, con=None, cur=None, retry=True, params=None):
 
     """
     warnings.warn(
-        "uquery is depreciated, and will be removed in future versions. "
+        "uquery is deprecated, and will be removed in future versions. "
         "You can use ``execute(...).rowcount`` instead.",
         FutureWarning)
 
@@ -260,9 +291,19 @@ def read_sql_table(table_name, con, index_col=None, coerce_float=True,
     read_sql_query : Read SQL query into a DataFrame.
     read_sql
 
-
     """
-    pandas_sql = PandasSQLAlchemy(con)
+    if not _is_sqlalchemy_engine(con):
+        raise NotImplementedError("read_sql_table only supported for "
+                                  "SQLAlchemy engines.")
+    import sqlalchemy
+    from sqlalchemy.schema import MetaData
+    meta = MetaData(con)
+    try:
+        meta.reflect(only=[table_name])
+    except sqlalchemy.exc.InvalidRequestError:
+        raise ValueError("Table %s not found" % table_name)
+
+    pandas_sql = PandasSQLAlchemy(con, meta=meta)
     table = pandas_sql.read_table(
         table_name, index_col=index_col, coerce_float=coerce_float,
         parse_dates=parse_dates, columns=columns)
@@ -374,26 +415,20 @@ def read_sql(sql, con, index_col=None, coerce_float=True, params=None,
     """
     pandas_sql = pandasSQL_builder(con)
 
-    if 'select' in sql.lower():
-        try:
-            if pandas_sql.has_table(sql):
-                return pandas_sql.read_table(
-                    sql, index_col=index_col, coerce_float=coerce_float,
-                    parse_dates=parse_dates, columns=columns)
-        except:
-            pass
-
+    if isinstance(pandas_sql, PandasSQLLegacy):
         return pandas_sql.read_sql(
             sql, index_col=index_col, params=params,
             coerce_float=coerce_float, parse_dates=parse_dates)
-    else:
-        if isinstance(pandas_sql, PandasSQLLegacy):
-            raise ValueError("Reading a table with read_sql is not supported "
-                             "for a DBAPI2 connection. Use an SQLAlchemy "
-                             "engine or specify an sql query")
+
+    if pandas_sql.has_table(sql):
+        pandas_sql.meta.reflect(only=[sql])
         return pandas_sql.read_table(
             sql, index_col=index_col, coerce_float=coerce_float,
             parse_dates=parse_dates, columns=columns)
+    else:
+        return pandas_sql.read_sql(
+            sql, index_col=index_col, params=params,
+            coerce_float=coerce_float, parse_dates=parse_dates)
 
 
 def to_sql(frame, name, con, flavor='sqlite', if_exists='fail', index=True,
@@ -478,17 +513,9 @@ def pandasSQL_builder(con, flavor=None, meta=None, is_cursor=False):
     """
     # When support for DBAPI connections is removed,
     # is_cursor should not be necessary.
-    try:
-        import sqlalchemy
-
-        if isinstance(con, sqlalchemy.engine.Engine):
-            return PandasSQLAlchemy(con, meta=meta)
-        else:
-            if flavor == 'mysql':
-                warnings.warn(_MYSQL_WARNING, FutureWarning)
-            return PandasSQLLegacy(con, flavor, is_cursor=is_cursor)
-
-    except ImportError:
+    if _is_sqlalchemy_engine(con):
+        return PandasSQLAlchemy(con, meta=meta)
+    else:
         if flavor == 'mysql':
             warnings.warn(_MYSQL_WARNING, FutureWarning)
         return PandasSQLLegacy(con, flavor, is_cursor=is_cursor)
@@ -574,7 +601,7 @@ class PandasSQLTable(PandasObject):
         ins = self.insert_statement()
         data_list = []
         temp = self.insert_data()
-        keys = temp.columns
+        keys = list(map(str, temp.columns))
 
         for t in temp.itertuples():
             data = dict((k, self.maybe_asscalar(v))
@@ -707,7 +734,8 @@ class PandasSQLTable(PandasObject):
                 pass  # this column not in results
 
     def _sqlalchemy_type(self, arr_or_dtype):
-        from sqlalchemy.types import Integer, Float, Text, Boolean, DateTime, Date, Interval
+        from sqlalchemy.types import (BigInteger, Float, Text, Boolean,
+            DateTime, Date, Interval)
 
         if arr_or_dtype is date:
             return Date
@@ -721,13 +749,13 @@ class PandasSQLTable(PandasObject):
             warnings.warn("the 'timedelta' type is not supported, and will be "
                           "written as integer values (ns frequency) to the "
                           "database.", UserWarning)
-            return Integer
+            return BigInteger
         elif com.is_float_dtype(arr_or_dtype):
             return Float
         elif com.is_integer_dtype(arr_or_dtype):
             # TODO: Refine integer size.
-            return Integer
-        elif com.is_bool(arr_or_dtype):
+            return BigInteger
+        elif com.is_bool_dtype(arr_or_dtype):
             return Boolean
         return Text
 
@@ -774,7 +802,6 @@ class PandasSQLAlchemy(PandasSQL):
         if not meta:
             from sqlalchemy.schema import MetaData
             meta = MetaData(self.engine)
-            meta.reflect(self.engine)
 
         self.meta = meta
 
@@ -819,19 +846,16 @@ class PandasSQLAlchemy(PandasSQL):
         return self.meta.tables
 
     def has_table(self, name):
-        if self.meta.tables.get(name) is not None:
-            return True
-        else:
-            return False
+        return self.engine.has_table(name)
 
     def get_table(self, table_name):
         return self.meta.tables.get(table_name)
 
     def drop_table(self, table_name):
         if self.engine.has_table(table_name):
+            self.meta.reflect(only=[table_name])
             self.get_table(table_name).drop()
             self.meta.clear()
-            self.meta.reflect()
 
     def _create_sql_schema(self, frame, table_name):
         table = PandasSQLTable(table_name, self, frame=frame)
@@ -1160,21 +1184,21 @@ def _get_schema_legacy(frame, name, flavor, keys=None):
 # legacy names, with depreciation warnings and copied docs
 
 def read_frame(*args, **kwargs):
-    """DEPRECIATED - use read_sql
+    """DEPRECATED - use read_sql
     """
-    warnings.warn("read_frame is depreciated, use read_sql", FutureWarning)
+    warnings.warn("read_frame is deprecated, use read_sql", FutureWarning)
     return read_sql(*args, **kwargs)
 
 
 def frame_query(*args, **kwargs):
-    """DEPRECIATED - use read_sql
+    """DEPRECATED - use read_sql
     """
-    warnings.warn("frame_query is depreciated, use read_sql", FutureWarning)
+    warnings.warn("frame_query is deprecated, use read_sql", FutureWarning)
     return read_sql(*args, **kwargs)
 
 
 def write_frame(frame, name, con, flavor='sqlite', if_exists='fail', **kwargs):
-    """DEPRECIATED - use to_sql
+    """DEPRECATED - use to_sql
 
     Write records stored in a DataFrame to a SQL database.
 
@@ -1207,7 +1231,7 @@ def write_frame(frame, name, con, flavor='sqlite', if_exists='fail', **kwargs):
     pandas.DataFrame.to_sql
 
     """
-    warnings.warn("write_frame is depreciated, use to_sql", FutureWarning)
+    warnings.warn("write_frame is deprecated, use to_sql", FutureWarning)
 
     # for backwards compatibility, set index=False when not specified
     index = kwargs.pop('index', False)

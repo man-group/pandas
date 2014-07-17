@@ -9,7 +9,7 @@ import numpy as np
 import pandas.tslib as tslib
 from pandas import compat, _np_version_under1p7
 from pandas.core.common import (ABCSeries, is_integer, is_integer_dtype, is_timedelta64_dtype,
-                                _values_from_object, is_list_like, isnull)
+                                _values_from_object, is_list_like, isnull, _ensure_object)
 
 repr_timedelta = tslib.repr_timedelta64
 repr_timedelta64 = tslib.repr_timedelta64
@@ -32,6 +32,8 @@ def to_timedelta(arg, box=True, unit='ns'):
     if _np_version_under1p7:
         raise ValueError("to_timedelta is not support for numpy < 1.7")
 
+    unit = _validate_timedelta_unit(unit)
+
     def _convert_listlike(arg, box, unit):
 
         if isinstance(arg, (list,tuple)):
@@ -40,13 +42,12 @@ def to_timedelta(arg, box=True, unit='ns'):
         if is_timedelta64_dtype(arg):
             value = arg.astype('timedelta64[ns]')
         elif is_integer_dtype(arg):
-            unit = _validate_timedelta_unit(unit)
 
             # these are shortcutable
             value = arg.astype('timedelta64[{0}]'.format(unit)).astype('timedelta64[ns]')
         else:
             try:
-                value = tslib.array_to_timedelta64(_ensure_object(arg),unit=unit)
+                value = tslib.array_to_timedelta64(_ensure_object(arg), unit=unit)
             except:
                 value = np.array([ _coerce_scalar_to_timedelta_type(r, unit=unit) for r in arg ])
 
@@ -67,14 +68,39 @@ def to_timedelta(arg, box=True, unit='ns'):
     # ...so it must be a scalar value. Return scalar.
     return _coerce_scalar_to_timedelta_type(arg, unit=unit)
 
+_unit_map = {
+    'Y' : 'Y',
+    'y' : 'Y',
+    'W' : 'W',
+    'w' : 'W',
+    'D' : 'D',
+    'd' : 'D',
+    'days' : 'D',
+    'Days' : 'D',
+    'day'  : 'D',
+    'Day'  : 'D',
+    'M'    : 'M',
+    'H'  : 'h',
+    'h'  : 'h',
+    'm'  : 'm',
+    'T'  : 'm',
+    'S'  : 's',
+    's'  : 's',
+    'L'  : 'ms',
+    'MS' : 'ms',
+    'ms' : 'ms',
+    'US' : 'us',
+    'us' : 'us',
+    'NS' : 'ns',
+    'ns' : 'ns',
+    }
+
 def _validate_timedelta_unit(arg):
     """ provide validation / translation for timedelta short units """
-
-    if re.search("Y|W|D",arg,re.IGNORECASE) or arg == 'M':
-        return arg.upper()
-    elif re.search("h|m|s|ms|us|ns",arg,re.IGNORECASE):
-        return arg.lower()
-    raise ValueError("invalid timedelta unit {0} provided".format(arg))
+    try:
+        return _unit_map[arg]
+    except:
+        raise ValueError("invalid timedelta unit {0} provided".format(arg))
 
 _short_search = re.compile(
     "^\s*(?P<neg>-?)\s*(?P<value>\d*\.?\d*)\s*(?P<unit>d|s|ms|us|ns)?\s*$",re.IGNORECASE)

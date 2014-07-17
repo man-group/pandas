@@ -269,6 +269,13 @@ Turn a matrix with hours in columns and days in rows into a continuous row seque
 `Dealing with duplicates when reindexing a timeseries to a specified frequency
 <http://stackoverflow.com/questions/22244383/pandas-df-refill-adding-two-columns-of-different-shape>`__
 
+Calculate the first day of the month for each entry in a DatetimeIndex
+
+.. ipython:: python
+
+    dates = pd.date_range('2000-01-01', periods=5)
+    dates.to_period(freq='M').to_timestamp()
+
 .. _cookbook.resample:
 
 Resampling
@@ -646,13 +653,38 @@ To globally provide aliases for axis names, one can define these 2 functions:
             raise Exception("invalid axis [%s] for alias [%s]" % (axis, alias))
         cls._AXIS_ALIASES[alias] = axis
 
+.. ipython:: python
+
    def clear_axis_alias(cls, axis, alias):
         if axis not in cls._AXIS_NUMBERS:
             raise Exception("invalid axis [%s] for alias [%s]" % (axis, alias))
         cls._AXIS_ALIASES.pop(alias,None)
 
+.. ipython:: python
 
    set_axis_alias(DataFrame,'columns', 'myaxis2')
    df2 = DataFrame(randn(3,2),columns=['c1','c2'],index=['i1','i2','i3'])
    df2.sum(axis='myaxis2')
    clear_axis_alias(DataFrame,'columns', 'myaxis2')
+
+Creating Example Data
+---------------------
+
+To create a dataframe from every combination of some given values, like R's ``expand.grid()``
+function, we can create a dict where the keys are column names and the values are lists
+of the data values:
+
+.. ipython:: python
+
+    import itertools
+
+    def expand_grid(data_dict):
+        rows = itertools.product(*data_dict.values())
+        return pd.DataFrame.from_records(rows, columns=data_dict.keys())
+
+    df = expand_grid(
+        {'height': [60, 70],
+         'weight': [100, 140, 180],
+         'sex': ['Male', 'Female']}
+    )
+    df

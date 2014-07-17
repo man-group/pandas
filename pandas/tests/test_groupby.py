@@ -126,8 +126,10 @@ class TestGroupBy(tm.TestCase):
             assert_series_equal(agged, grouped.mean())
             assert_series_equal(grouped.agg(np.sum), grouped.sum())
 
+            expected = grouped.apply(lambda x: x * x.sum())
             transformed = grouped.transform(lambda x: x * x.sum())
             self.assertEqual(transformed[7], 12)
+            assert_series_equal(transformed, expected)
 
             value_grouped = data.groupby(data)
             assert_series_equal(value_grouped.aggregate(np.mean), agged)
@@ -279,6 +281,35 @@ class TestGroupBy(tm.TestCase):
         result = df.groupby(level=0).nth(3)
         expected = df.loc[[]]
         assert_frame_equal(result,expected)
+
+        # GH 7559
+        # from the vbench
+        df = DataFrame(np.random.randint(1, 10, (100, 2)),dtype='int64')
+        s = df[1]
+        g = df[0]
+        expected = s.groupby(g).first()
+        expected2 = s.groupby(g).apply(lambda x: x.iloc[0])
+        assert_series_equal(expected2,expected)
+
+        # validate first
+        v = s[g==1].iloc[0]
+        self.assertEqual(expected.iloc[0],v)
+        self.assertEqual(expected2.iloc[0],v)
+
+        # this is NOT the same as .first (as sorted is default!)
+        # as it keeps the order in the series (and not the group order)
+        # related GH 7287
+        expected = s.groupby(g,sort=False).first()
+        expected.index = range(1,10)
+        result = s.groupby(g).nth(0,dropna='all')
+        assert_series_equal(result,expected)
+
+        # doc example
+        df = DataFrame([[1, np.nan], [1, 4], [5, 6]], columns=['A', 'B'])
+        g = df.groupby('A')
+        result = g.B.nth(0, dropna=True)
+        expected = g.B.first()
+        assert_series_equal(result,expected)
 
     def test_grouper_index_types(self):
         # related GH5375
@@ -681,11 +712,14 @@ class TestGroupBy(tm.TestCase):
             assert_frame_equal(result, expected)
 
             # group frame by function dict
-            result = grouped.agg(
-                OrderedDict([['A', 'var'], ['B', 'std'], ['C', 'mean']]))
+            result = grouped.agg(OrderedDict([['A', 'var'],
+                                              ['B', 'std'],
+                                              ['C', 'mean'],
+                                              ['D', 'sem']]))
             expected = DataFrame(OrderedDict([['A', grouped['A'].var()],
                                               ['B', grouped['B'].std()],
-                                              ['C', grouped['C'].mean()]]))
+                                              ['C', grouped['C'].mean()],
+                                              ['D', grouped['D'].sem()]]))
             assert_frame_equal(result, expected)
 
         by_weekday = self.tsframe.groupby(lambda x: x.weekday())
@@ -1633,8 +1667,13 @@ class TestGroupBy(tm.TestCase):
             result = op(grouped)['C']
             assert_series_equal(result, exp)
 
+        _testit(lambda x: x.count())
         _testit(lambda x: x.sum())
+        _testit(lambda x: x.std())
+        _testit(lambda x: x.var())
+        _testit(lambda x: x.sem())
         _testit(lambda x: x.mean())
+        _testit(lambda x: x.median())
         _testit(lambda x: x.prod())
         _testit(lambda x: x.min())
         _testit(lambda x: x.max())
@@ -4039,6 +4078,7 @@ class TestGroupBy(tm.TestCase):
             'value_counts',
             'diff',
             'unique', 'nunique',
+            'nlargest', 'nsmallest',
         ])
 
         for obj, whitelist in zip((df, s),
@@ -4166,8 +4206,8 @@ class TestGroupBy(tm.TestCase):
             'agg','aggregate','apply','boxplot','filter','first','get_group',
             'groups','hist','indices','last','max','mean','median',
             'min','name','ngroups','nth','ohlc','plot', 'prod',
-            'size','std','sum','transform','var', 'count', 'head', 'describe',
-            'cummax', 'quantile', 'rank', 'cumprod', 'tail',
+            'size', 'std', 'sum', 'transform', 'var', 'sem', 'count', 'head',
+            'describe', 'cummax', 'quantile', 'rank', 'cumprod', 'tail',
             'resample', 'cummin', 'fillna', 'cumsum', 'cumcount',
             'all', 'shift', 'skew', 'bfill', 'irow', 'ffill',
             'take', 'tshift', 'pct_change', 'any', 'mad', 'corr', 'corrwith',
@@ -4305,6 +4345,93 @@ class TestGroupBy(tm.TestCase):
         expected = DataFrame({'a': [2, 2]}, index=pd.Index(list('ab'),
                                                            name='grp'))
         tm.assert_frame_equal(result, expected)
+
+    def test__cython_agg_general(self):
+        ops = [('mean', np.mean),
+               ('median', np.median),
+               ('var', np.var),
+               ('add', np.sum),
+               ('prod', np.prod),
+               ('min', np.min),
+               ('max', np.max),
+               ('first', lambda x: x.iloc[0]),
+               ('last', lambda x: x.iloc[-1]),
+               ('count', np.size),
+               ]
+        df = DataFrame(np.random.randn(1000))
+        labels = np.random.randint(0, 50, size=1000).astype(float)
+
+        for op, targop in ops:
+            result = df.groupby(labels)._cython_agg_general(op)
+            expected = df.groupby(labels).agg(targop)
+            try:
+                tm.assert_frame_equal(result, expected)
+            except BaseException as exc:
+                exc.args += ('operation: %s' % op,)
+                raise
+
+    def test_ops_general(self):
+        ops = [('mean', np.mean),
+               ('median', np.median),
+               ('std', np.std),
+               ('var', np.var),
+               ('sum', np.sum),
+               ('prod', np.prod),
+               ('min', np.min),
+               ('max', np.max),
+               ('first', lambda x: x.iloc[0]),
+               ('last', lambda x: x.iloc[-1]),
+               ('count', np.size),
+               ]
+        try:
+            from scipy.stats import sem
+        except ImportError:
+            pass
+        else:
+            ops.append(('sem', sem))
+        df = DataFrame(np.random.randn(1000))
+        labels = np.random.randint(0, 50, size=1000).astype(float)
+
+        for op, targop in ops:
+            result = getattr(df.groupby(labels), op)().astype(float)
+            expected = df.groupby(labels).agg(targop)
+            try:
+                tm.assert_frame_equal(result, expected)
+            except BaseException as exc:
+                exc.args += ('operation: %s' % op,)
+                raise
+
+    def test_max_nan_bug(self):
+        raw = """,Date,app,File
+2013-04-23,2013-04-23 00:00:00,,log080001.log
+2013-05-06,2013-05-06 00:00:00,,log.log
+2013-05-07,2013-05-07 00:00:00,OE,xlsx"""
+        df = pd.read_csv(StringIO(raw), parse_dates=[0])
+        gb = df.groupby('Date')
+        r = gb[['File']].max()
+        e = gb['File'].max().to_frame()
+        tm.assert_frame_equal(r, e)
+        self.assertFalse(r['File'].isnull().any())
+
+    def test_nlargest(self):
+        a = Series([1, 3, 5, 7, 2, 9, 0, 4, 6, 10])
+        b = Series(list('a' * 5 + 'b' * 5))
+        gb = a.groupby(b)
+        r = gb.nlargest(3)
+        e = Series([7, 5, 3, 10, 9, 6],
+                   index=MultiIndex.from_arrays([list('aaabbb'),
+                                                 [3, 2, 1, 9, 5, 8]]))
+        tm.assert_series_equal(r, e)
+
+    def test_nsmallest(self):
+        a = Series([1, 3, 5, 7, 2, 9, 0, 4, 6, 10])
+        b = Series(list('a' * 5 + 'b' * 5))
+        gb = a.groupby(b)
+        r = gb.nsmallest(3)
+        e = Series([1, 2, 3, 0, 4, 6],
+                   index=MultiIndex.from_arrays([list('aaabbb'),
+                                                 [0, 4, 1, 6, 7, 8]]))
+        tm.assert_series_equal(r, e)
 
 
 def assert_fp_equal(a, b):

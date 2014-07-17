@@ -58,7 +58,7 @@ def create_data():
     from pandas import (Series,TimeSeries,DataFrame,Panel,
                         SparseSeries,SparseTimeSeries,SparseDataFrame,SparsePanel,
                         Index,MultiIndex,PeriodIndex,
-                        date_range,bdate_range,Timestamp)
+                        date_range,period_range,bdate_range,Timestamp)
     nan = np.nan
 
     data = {
@@ -70,7 +70,9 @@ def create_data():
         }
 
     index = dict(int = Index(np.arange(10)),
-                  date = date_range('20130101',periods=10))
+                 date = date_range('20130101',periods=10),
+                 period = period_range('2013-01-01', freq='M', periods=10))
+
     mi = dict(reg2 = MultiIndex.from_tuples(tuple(zip(*[['bar', 'bar', 'baz', 'baz', 'foo', 'foo', 'qux', 'qux'],
                                                       ['one', 'two', 'one', 'two', 'one', 'two', 'one', 'two']])),
                                                  names=['first', 'second']))
@@ -80,15 +82,21 @@ def create_data():
                   ts = TimeSeries(np.arange(10).astype(np.int64),index=date_range('20130101',periods=10)),
                   mi = Series(np.arange(5).astype(np.float64),index=MultiIndex.from_tuples(tuple(zip(*[[1,1,2,2,2],
                                                                                                     [3,4,3,4,5]])),
-                                                                                           names=['one','two'])))
+                                                                                           names=['one','two'])),
+                  dup=Series(np.arange(5).astype(np.float64), index=['A', 'B', 'C', 'D', 'A']))
+
     frame = dict(float = DataFrame(dict(A = series['float'], B = series['float'] + 1)),
                  int = DataFrame(dict(A = series['int']  , B = series['int']   + 1)),
                  mixed = DataFrame(dict([ (k,data[k]) for k in ['A','B','C','D']])),
                  mi = DataFrame(dict(A = np.arange(5).astype(np.float64), B = np.arange(5).astype(np.int64)),
                                 index=MultiIndex.from_tuples(tuple(zip(*[['bar','bar','baz','baz','baz'],
                                                                        ['one','two','one','two','three']])),
-                                                             names=['first','second'])))
-    panel = dict(float = Panel(dict(ItemA = frame['float'], ItemB = frame['float']+1)))
+                                                             names=['first','second'])),
+                 dup = DataFrame(np.arange(15).reshape(5, 3).astype(np.float64),
+                                 columns=['A', 'B', 'A']))
+    panel = dict(float = Panel(dict(ItemA = frame['float'], ItemB = frame['float']+1)),
+                 dup = Panel(np.arange(30).reshape(3, 5, 2).astype(np.float64),
+                             items=['A', 'B', 'A']))
 
 
 

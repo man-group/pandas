@@ -2,7 +2,6 @@
 
 from datetime import datetime, timedelta
 from pandas.compat import range, lrange, lzip, u, zip
-import sys
 import operator
 import pickle
 import re
@@ -32,11 +31,6 @@ import pandas as pd
 from pandas.lib import Timestamp
 
 from pandas import _np_version_under1p7
-
-def _skip_if_need_numpy_1_7():
-    if _np_version_under1p7:
-        raise nose.SkipTest('numpy >= 1.7 required')
-
 
 class TestIndex(tm.TestCase):
     _multiprocess_can_split_ = True
@@ -178,12 +172,17 @@ class TestIndex(tm.TestCase):
         # it should be possible to convert any object that satisfies the numpy
         # ndarray interface directly into an Index
         class ArrayLike(object):
+            def __init__(self, array):
+                self.array = array
             def __array__(self, dtype=None):
-                return np.arange(5)
+                return self.array
 
-        expected = pd.Index(np.arange(5))
-        result = pd.Index(ArrayLike())
-        self.assertTrue(result.equals(expected))
+        for array in [np.arange(5),
+                      np.array(['a', 'b', 'c']),
+                      pd.date_range('2000-01-01', periods=3).values]:
+            expected = pd.Index(array)
+            result = pd.Index(ArrayLike(array))
+            self.assertTrue(result.equals(expected))
 
     def test_index_ctor_infer_periodindex(self):
         from pandas import period_range, PeriodIndex
@@ -336,7 +335,7 @@ class TestIndex(tm.TestCase):
         tm.assert_isinstance(self.dateIndex.asof(d), Timestamp)
 
     def test_nanosecond_index_access(self):
-        _skip_if_need_numpy_1_7()
+        tm._skip_if_not_numpy17_friendly()
 
         s = Series([Timestamp('20130101')]).values.view('i8')[0]
         r = DatetimeIndex([s + 50 + i for i in range(100)])
@@ -446,6 +445,33 @@ class TestIndex(tm.TestCase):
 
         # non-iterable input
         assertRaisesRegexp(TypeError, "iterable", first.intersection, 0.5)
+
+        idx1 = Index([1, 2, 3, 4, 5], name='idx')
+        # if target has the same name, it is preserved
+        idx2 = Index([3, 4, 5, 6, 7], name='idx')
+        expected2 = Index([3, 4, 5], name='idx')
+        result2 = idx1.intersection(idx2)
+        self.assertTrue(result2.equals(expected2))
+        self.assertEqual(result2.name, expected2.name)
+
+        # if target name is different, it will be reset
+        idx3 = Index([3, 4, 5, 6, 7], name='other')
+        expected3 = Index([3, 4, 5], name=None)
+        result3 = idx1.intersection(idx3)
+        self.assertTrue(result3.equals(expected3))
+        self.assertEqual(result3.name, expected3.name)
+
+        # non monotonic
+        idx1 = Index([5, 3, 2, 4, 1], name='idx')
+        idx2 = Index([4, 7, 6, 5, 3], name='idx')
+        result2 = idx1.intersection(idx2)
+        self.assertTrue(tm.equalContents(result2, expected2))
+        self.assertEqual(result2.name, expected2.name)
+
+        idx3 = Index([4, 7, 6, 5, 3], name='other')
+        result3 = idx1.intersection(idx3)
+        self.assertTrue(tm.equalContents(result3, expected3))
+        self.assertEqual(result3.name, expected3.name)
 
     def test_union(self):
         first = self.strIndex[5:20]
@@ -873,6 +899,12 @@ class TestIndex(tm.TestCase):
         expected = right_idx.astype(object).union(left_idx.astype(object))
         tm.assert_index_equal(joined, expected)
 
+    def test_nan_first_take_datetime(self):
+        idx = Index([pd.NaT, Timestamp('20130101'), Timestamp('20130102')])
+        res = idx.take([-1, 0, 1])
+        exp = Index([idx[-1], idx[0], idx[1]])
+        tm.assert_index_equal(res, exp)
+
 
 class TestFloat64Index(tm.TestCase):
     _multiprocess_can_split_ = True
@@ -1009,6 +1041,13 @@ class TestFloat64Index(tm.TestCase):
         i = Float64Index([1.0, 2.0])
         np.testing.assert_array_equal(i.isin([np.nan]),
                                       np.array([False, False]))
+
+    def test_astype_from_object(self):
+        index = Index([1.0, np.nan, 0.2], dtype='object')
+        result = index.astype(float)
+        expected = Float64Index([1.0, np.nan, 0.2])
+        tm.assert_equal(result.dtype, expected.dtype)
+        tm.assert_index_equal(result, expected)
 
 
 class TestInt64Index(tm.TestCase):
@@ -1816,6 +1855,15 @@ class TestMultiIndex(tm.TestCase):
 
         assert_array_equal(result, expected)
         self.assertEqual(result.names, names)
+
+    def test_from_product_datetimeindex(self):
+        dt_index = pd.date_range('2000-01-01', periods=2)
+        mi = pd.MultiIndex.from_product([[1, 2], dt_index])
+        etalon = pd.lib.list_to_object_array([(1, pd.Timestamp('2000-01-01')),
+                                              (1, pd.Timestamp('2000-01-02')),
+                                              (2, pd.Timestamp('2000-01-01')),
+                                              (2, pd.Timestamp('2000-01-02'))])
+        assert_array_equal(mi.values, etalon)
 
     def test_append(self):
         result = self.index[:3].append(self.index[3:])

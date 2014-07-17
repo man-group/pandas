@@ -350,6 +350,7 @@ Computations / Descriptive Stats
    Series.prod
    Series.quantile
    Series.rank
+   Series.sem
    Series.skew
    Series.std
    Series.sum
@@ -523,6 +524,7 @@ Attributes and underlying data
    DataFrame.ftypes
    DataFrame.get_dtype_counts
    DataFrame.get_ftype_counts
+   DataFrame.select_dtypes
    DataFrame.values
    DataFrame.axes
    DataFrame.ndim
@@ -642,6 +644,7 @@ Computations / Descriptive Stats
    DataFrame.prod
    DataFrame.quantile
    DataFrame.rank
+   DataFrame.sem
    DataFrame.skew
    DataFrame.sum
    DataFrame.std
@@ -895,6 +898,7 @@ Computations / Descriptive Stats
    Panel.min
    Panel.pct_change
    Panel.prod
+   Panel.sem
    Panel.skew
    Panel.sum
    Panel.std
@@ -1222,6 +1226,7 @@ Computations / Descriptive Stats
 
    GroupBy.mean
    GroupBy.median
+   GroupBy.sem
    GroupBy.std
    GroupBy.var
    GroupBy.ohlc

@@ -8,6 +8,7 @@ from pandas.core.base import FrozenList, FrozenNDArray, DatetimeIndexOpsMixin
 from pandas.util.testing import assertRaisesRegexp, assert_isinstance
 from pandas import Series, Index, Int64Index, DatetimeIndex, PeriodIndex
 from pandas import _np_version_under1p7
+import pandas.tslib as tslib
 import nose
 
 import pandas.util.testing as tm
@@ -197,12 +198,14 @@ class TestIndexOps(Ops):
         self.not_valid_objs = [ o for o in self.objs if not o._allow_index_ops ]
 
     def test_ops(self):
-        if _np_version_under1p7:
-            raise nose.SkipTest("test only valid in numpy >= 1.7")
+        tm._skip_if_not_numpy17_friendly()
         for op in ['max','min']:
             for o in self.objs:
                 result = getattr(o,op)()
-                expected = getattr(o.values,op)()
+                if not isinstance(o, PeriodIndex):
+                    expected = getattr(o.values, op)()
+                else:
+                    expected = pd.Period(ordinal=getattr(o.values, op)(), freq=o.freq)
                 try:
                     self.assertEqual(result, expected)
                 except ValueError:
@@ -231,17 +234,6 @@ class TestIndexOps(Ops):
                 obj = klass([pd.NaT, datetime(2011, 11, 1), pd.NaT])
                 # check DatetimeIndex non-monotonic path
                 self.assertEqual(getattr(obj, op)(), datetime(2011, 11, 1))
-
-            # explicitly create DatetimeIndex
-            obj = DatetimeIndex([])
-            self.assertTrue(pd.isnull(getattr(obj, op)()))
-
-            obj = DatetimeIndex([pd.NaT])
-            self.assertTrue(pd.isnull(getattr(obj, op)()))
-
-            obj = DatetimeIndex([pd.NaT, pd.NaT, pd.NaT])
-            self.assertTrue(pd.isnull(getattr(obj, op)()))
-
 
     def test_value_counts_unique_nunique(self):
         for o in self.objs:
@@ -292,12 +284,13 @@ class TestIndexOps(Ops):
                     o = klass(np.repeat(values, range(1, len(o) + 1)))
 
                 if isinstance(o, DatetimeIndex):
-                    # DatetimeIndex: nan is casted to Nat and included
-                    expected_s = Series(list(range(10, 2, -1)) + [3], index=values[9:0:-1])
+                    expected_s_na = Series(list(range(10, 2, -1)) + [3], index=values[9:0:-1])
+                    expected_s = Series(list(range(10, 2, -1)), index=values[9:1:-1])
                 else:
-                    # nan is excluded
-                    expected_s = Series(range(10, 2, -1), index=values[9:1:-1], dtype='int64')
+                    expected_s_na = Series(list(range(10, 2, -1)) +[3], index=values[9:0:-1], dtype='int64')
+                    expected_s = Series(list(range(10, 2, -1)), index=values[9:1:-1], dtype='int64')
 
+                tm.assert_series_equal(o.value_counts(dropna=False), expected_s_na)
                 tm.assert_series_equal(o.value_counts(), expected_s)
 
                 # numpy_array_equal cannot compare arrays includes nan
@@ -309,10 +302,8 @@ class TestIndexOps(Ops):
                 else:
                     self.assertTrue(pd.isnull(result[0]))
 
-                if isinstance(o, DatetimeIndex):
-                    self.assertEqual(o.nunique(), 9)
-                else:
-                    self.assertEqual(o.nunique(), 8)
+                self.assertEqual(o.nunique(), 8)
+                self.assertEqual(o.nunique(dropna=False), 9)
 
     def test_value_counts_inferred(self):
         klasses = [Index, Series]
@@ -406,6 +397,9 @@ class TestIndexOps(Ops):
 
             result = s.value_counts()
             self.assertEqual(result.index.dtype, 'datetime64[ns]')
+            tm.assert_series_equal(result, expected_s)
+
+            result = s.value_counts(dropna=False)
             expected_s[pd.NaT] = 1
             tm.assert_series_equal(result, expected_s)
 
@@ -415,7 +409,8 @@ class TestIndexOps(Ops):
             self.assert_numpy_array_equal(unique[:3], expected)
             self.assertTrue(unique[3] is pd.NaT or unique[3].astype('int64') == pd.tslib.iNaT)
 
-            self.assertEqual(s.nunique(), 4)
+            self.assertEqual(s.nunique(), 3)
+            self.assertEqual(s.nunique(dropna=False), 4)
 
             # timedelta64[ns]
             td = df.dt - df.dt + timedelta(1)
@@ -512,6 +507,105 @@ class TestDatetimeIndexOps(Ops):
         self.assertEquals(s.day,10)
         self.assertRaises(AttributeError, lambda : s.weekday)
 
+    def test_asobject_tolist(self):
+        idx = pd.date_range(start='2013-01-01', periods=4, freq='M', name='idx')
+        expected_list = [pd.Timestamp('2013-01-31'), pd.Timestamp('2013-02-28'),
+                         pd.Timestamp('2013-03-31'), pd.Timestamp('2013-04-30')]
+        expected = pd.Index(expected_list, dtype=object, name='idx')
+        result = idx.asobject
+        self.assertTrue(isinstance(result, Index))
+        self.assertEqual(result.dtype, object)
+        self.assertTrue(result.equals(expected))
+        self.assertEqual(result.name, expected.name)
+        self.assertEqual(idx.tolist(), expected_list)
+
+        idx = pd.date_range(start='2013-01-01', periods=4, freq='M', name='idx', tz='Asia/Tokyo')
+        expected_list = [pd.Timestamp('2013-01-31', tz='Asia/Tokyo'),
+                         pd.Timestamp('2013-02-28', tz='Asia/Tokyo'),
+                         pd.Timestamp('2013-03-31', tz='Asia/Tokyo'),
+                         pd.Timestamp('2013-04-30', tz='Asia/Tokyo')]
+        expected = pd.Index(expected_list, dtype=object, name='idx')
+        result = idx.asobject
+        self.assertTrue(isinstance(result, Index))
+        self.assertEqual(result.dtype, object)
+        self.assertTrue(result.equals(expected))
+        self.assertEqual(result.name, expected.name)
+        self.assertEqual(idx.tolist(), expected_list)
+
+        idx = DatetimeIndex([datetime(2013, 1, 1), datetime(2013, 1, 2),
+                             pd.NaT, datetime(2013, 1, 4)], name='idx')
+        expected_list = [pd.Timestamp('2013-01-01'), pd.Timestamp('2013-01-02'),
+                         pd.NaT, pd.Timestamp('2013-01-04')]
+        expected = pd.Index(expected_list, dtype=object, name='idx')
+        result = idx.asobject
+        self.assertTrue(isinstance(result, Index))
+        self.assertEqual(result.dtype, object)
+        self.assertTrue(result.equals(expected))
+        self.assertEqual(result.name, expected.name)
+        self.assertEqual(idx.tolist(), expected_list)
+
+    def test_minmax(self):
+        for tz in [None, 'Asia/Tokyo', 'US/Eastern']:
+            # monotonic
+            idx1 = pd.DatetimeIndex([pd.NaT, '2011-01-01', '2011-01-02',
+                                     '2011-01-03'], tz=tz)
+            self.assertTrue(idx1.is_monotonic)
+
+            # non-monotonic
+            idx2 = pd.DatetimeIndex(['2011-01-01', pd.NaT, '2011-01-03',
+                                     '2011-01-02', pd.NaT], tz=tz)
+            self.assertFalse(idx2.is_monotonic)
+
+            for idx in [idx1, idx2]:
+                self.assertEqual(idx.min(), pd.Timestamp('2011-01-01', tz=tz))
+                self.assertEqual(idx.max(), pd.Timestamp('2011-01-03', tz=tz))
+
+        for op in ['min', 'max']:
+            # Return NaT
+            obj = DatetimeIndex([])
+            self.assertTrue(pd.isnull(getattr(obj, op)()))
+
+            obj = DatetimeIndex([pd.NaT])
+            self.assertTrue(pd.isnull(getattr(obj, op)()))
+
+            obj = DatetimeIndex([pd.NaT, pd.NaT, pd.NaT])
+            self.assertTrue(pd.isnull(getattr(obj, op)()))
+
+    def test_representation(self):
+        idx1 = DatetimeIndex([], freq='D')
+        idx2 = DatetimeIndex(['2011-01-01'], freq='D')
+        idx3 = DatetimeIndex(['2011-01-01', '2011-01-02'], freq='D')
+        idx4 = DatetimeIndex(['2011-01-01', '2011-01-02', '2011-01-03'], freq='D')
+        idx5 = DatetimeIndex(['2011-01-01 09:00', '2011-01-01 10:00', '2011-01-01 11:00'],
+                             freq='H', tz='Asia/Tokyo')
+        idx6 = DatetimeIndex(['2011-01-01 09:00', '2011-01-01 10:00', pd.NaT],
+                             tz='US/Eastern')
+
+        exp1 = """<class 'pandas.tseries.index.DatetimeIndex'>
+Length: 0, Freq: D, Timezone: None"""
+        exp2 = """<class 'pandas.tseries.index.DatetimeIndex'>
+[2011-01-01]
+Length: 1, Freq: D, Timezone: None"""
+        exp3 = """<class 'pandas.tseries.index.DatetimeIndex'>
+[2011-01-01, 2011-01-02]
+Length: 2, Freq: D, Timezone: None"""
+        exp4 = """<class 'pandas.tseries.index.DatetimeIndex'>
+[2011-01-01, ..., 2011-01-03]
+Length: 3, Freq: D, Timezone: None"""
+        exp5 = """<class 'pandas.tseries.index.DatetimeIndex'>
+[2011-01-01 09:00:00+09:00, ..., 2011-01-01 11:00:00+09:00]
+Length: 3, Freq: H, Timezone: Asia/Tokyo"""
+        exp6 = """<class 'pandas.tseries.index.DatetimeIndex'>
+[2011-01-01 09:00:00-05:00, ..., NaT]
+Length: 3, Freq: None, Timezone: US/Eastern"""
+
+        for idx, expected in zip([idx1, idx2, idx3, idx4, idx5, idx6],
+                                 [exp1, exp2, exp3, exp4, exp5, exp6]):
+            for func in ['__repr__', '__unicode__', '__str__']:
+                result = getattr(idx, func)()
+                self.assertEqual(result, expected)
+
+
 class TestPeriodIndexOps(Ops):
     _allowed = '_allow_period_index_ops'
 
@@ -524,6 +618,117 @@ class TestPeriodIndexOps(Ops):
     def test_ops_properties(self):
         self.check_ops_properties(['year','month','day','hour','minute','second','weekofyear','week','dayofweek','dayofyear','quarter'])
         self.check_ops_properties(['qyear'], lambda x: isinstance(x,PeriodIndex))
+
+    def test_asobject_tolist(self):
+        idx = pd.period_range(start='2013-01-01', periods=4, freq='M', name='idx')
+        expected_list = [pd.Period('2013-01-31', freq='M'), pd.Period('2013-02-28', freq='M'),
+                         pd.Period('2013-03-31', freq='M'), pd.Period('2013-04-30', freq='M')]
+        expected = pd.Index(expected_list, dtype=object, name='idx')
+        result = idx.asobject
+        self.assertTrue(isinstance(result, Index))
+        self.assertEqual(result.dtype, object)
+        self.assertTrue(result.equals(expected))
+        self.assertEqual(result.name, expected.name)
+        self.assertEqual(idx.tolist(), expected_list)
+
+        idx = PeriodIndex(['2013-01-01', '2013-01-02', 'NaT', '2013-01-04'], freq='D', name='idx')
+        expected_list = [pd.Period('2013-01-01', freq='D'), pd.Period('2013-01-02', freq='D'),
+                         pd.Period('NaT', freq='D'), pd.Period('2013-01-04', freq='D')]
+        expected = pd.Index(expected_list, dtype=object, name='idx')
+        result = idx.asobject
+        self.assertTrue(isinstance(result, Index))
+        self.assertEqual(result.dtype, object)
+        for i in [0, 1, 3]:
+            self.assertTrue(result[i], expected[i])
+        self.assertTrue(result[2].ordinal, pd.tslib.iNaT)
+        self.assertTrue(result[2].freq, 'D')
+        self.assertEqual(result.name, expected.name)
+
+        result_list = idx.tolist()
+        for i in [0, 1, 3]:
+            self.assertTrue(result_list[i], expected_list[i])
+        self.assertTrue(result_list[2].ordinal, pd.tslib.iNaT)
+        self.assertTrue(result_list[2].freq, 'D')
+
+    def test_minmax(self):
+
+        # monotonic
+        idx1 = pd.PeriodIndex([pd.NaT, '2011-01-01', '2011-01-02',
+                               '2011-01-03'], freq='D')
+        self.assertTrue(idx1.is_monotonic)
+
+        # non-monotonic
+        idx2 = pd.PeriodIndex(['2011-01-01', pd.NaT, '2011-01-03',
+                                '2011-01-02', pd.NaT], freq='D')
+        self.assertFalse(idx2.is_monotonic)
+
+        for idx in [idx1, idx2]:
+            self.assertEqual(idx.min(), pd.Period('2011-01-01', freq='D'))
+            self.assertEqual(idx.max(), pd.Period('2011-01-03', freq='D'))
+
+        for op in ['min', 'max']:
+            # Return NaT
+            obj = PeriodIndex([], freq='M')
+            result = getattr(obj, op)()
+            self.assertEqual(result.ordinal, tslib.iNaT)
+            self.assertEqual(result.freq, 'M')
+
+            obj = PeriodIndex([pd.NaT], freq='M')
+            result = getattr(obj, op)()
+            self.assertEqual(result.ordinal, tslib.iNaT)
+            self.assertEqual(result.freq, 'M')
+
+            obj = PeriodIndex([pd.NaT, pd.NaT, pd.NaT], freq='M')
+            result = getattr(obj, op)()
+            self.assertEqual(result.ordinal, tslib.iNaT)
+            self.assertEqual(result.freq, 'M')
+
+    def test_representation(self):
+        # GH 7601
+        idx1 = PeriodIndex([], freq='D')
+        idx2 = PeriodIndex(['2011-01-01'], freq='D')
+        idx3 = PeriodIndex(['2011-01-01', '2011-01-02'], freq='D')
+        idx4 = PeriodIndex(['2011-01-01', '2011-01-02', '2011-01-03'], freq='D')
+        idx5 = PeriodIndex(['2011', '2012', '2013'], freq='A')
+        idx6 = PeriodIndex(['2011-01-01 09:00', '2012-02-01 10:00', 'NaT'], freq='H')
+
+        idx7 = pd.period_range('2013Q1', periods=1, freq="Q")
+        idx8 = pd.period_range('2013Q1', periods=2, freq="Q")
+        idx9 = pd.period_range('2013Q1', periods=3, freq="Q")
+
+        exp1 = """<class 'pandas.tseries.period.PeriodIndex'>
+Length: 0, Freq: D"""
+        exp2 = """<class 'pandas.tseries.period.PeriodIndex'>
+[2011-01-01]
+Length: 1, Freq: D"""
+        exp3 = """<class 'pandas.tseries.period.PeriodIndex'>
+[2011-01-01, 2011-01-02]
+Length: 2, Freq: D"""
+        exp4 = """<class 'pandas.tseries.period.PeriodIndex'>
+[2011-01-01, ..., 2011-01-03]
+Length: 3, Freq: D"""
+        exp5 = """<class 'pandas.tseries.period.PeriodIndex'>
+[2011, ..., 2013]
+Length: 3, Freq: A-DEC"""
+        exp6 = """<class 'pandas.tseries.period.PeriodIndex'>
+[2011-01-01 09:00, ..., NaT]
+Length: 3, Freq: H"""
+        exp7 = """<class 'pandas.tseries.period.PeriodIndex'>
+[2013Q1]
+Length: 1, Freq: Q-DEC"""
+        exp8 = """<class 'pandas.tseries.period.PeriodIndex'>
+[2013Q1, 2013Q2]
+Length: 2, Freq: Q-DEC"""
+        exp9 = """<class 'pandas.tseries.period.PeriodIndex'>
+[2013Q1, ..., 2013Q3]
+Length: 3, Freq: Q-DEC"""
+
+        for idx, expected in zip([idx1, idx2, idx3, idx4, idx5, idx6, idx7, idx8, idx9],
+                                 [exp1, exp2, exp3, exp4, exp5, exp6, exp7, exp8, exp9]):
+            for func in ['__repr__', '__unicode__', '__str__']:
+                result = getattr(idx, func)()
+                self.assertEqual(result, expected)
+
 
 if __name__ == '__main__':
     import nose

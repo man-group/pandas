@@ -98,8 +98,10 @@ They can take a number of arguments:
     data.  Defaults to 0 if no ``names`` passed, otherwise ``None``. Explicitly
     pass ``header=0`` to be able to replace existing names. The header can be
     a list of integers that specify row locations for a multi-index on the columns
-    E.g. [0,1,3]. Intervening rows that are not specified will be skipped.
-    (E.g. 2 in this example are skipped)
+    E.g. [0,1,3]. Intervening rows that are not specified will be
+    skipped (e.g. 2 in this example are skipped). Note that this parameter
+    ignores commented lines, so header=0 denotes the first line of
+    data rather than the first line of the file.
   - ``skiprows``: A collection of numbers for rows in the file to skip. Can
     also be an integer to skip the first ``n`` rows
   - ``index_col``: column number, column name, or list of column numbers/names,
@@ -145,8 +147,12 @@ They can take a number of arguments:
     Acceptable values are 0, 1, 2, and 3 for QUOTE_MINIMAL, QUOTE_ALL, QUOTE_NONE, and QUOTE_NONNUMERIC, respectively.
   - ``skipinitialspace`` : boolean, default ``False``, Skip spaces after delimiter
   - ``escapechar`` : string, to specify how to escape quoted data
-  - ``comment``: denotes the start of a comment and ignores the rest of the line.
-    Currently line commenting is not supported.
+  - ``comment``: Indicates remainder of line should not be parsed. If found at the
+    beginning of a line, the line will be ignored altogether. This parameter
+    must be a single character. Also, fully commented lines
+    are ignored by the parameter `header` but not by `skiprows`. For example,
+    if comment='#', parsing '#empty\n1,2,3\na,b,c' with `header=0` will
+    result in '1,2,3' being treated as the header.
   - ``nrows``: Number of rows to read out of the file. Useful to only read a
     small portion of a large file
   - ``iterator``: If True, return a ``TextFileReader`` to enable reading a file
@@ -252,6 +258,27 @@ after a delimiter:
    data = 'a, b, c\n1, 2, 3\n4, 5, 6'
    print(data)
    pd.read_csv(StringIO(data), skipinitialspace=True)
+
+Moreover, ``read_csv`` ignores any completely commented lines:
+
+.. ipython:: python
+
+   data = 'a,b,c\n# commented line\n1,2,3\n#another comment\n4,5,6'
+   print(data)
+   pd.read_csv(StringIO(data), comment='#')
+
+.. note::
+
+   The presence of ignored lines might create ambiguities involving line numbers;
+   the parameter ``header`` uses row numbers (ignoring commented
+   lines), while ``skiprows`` uses line numbers (including commented lines):
+
+   .. ipython:: python
+
+      data = '#comment\na,b,c\nA,B,C\n1,2,3'
+      pd.read_csv(StringIO(data), comment='#', header=1)
+      data = 'A,B,C\n#comment\na,b,c\n1,2,3'
+      pd.read_csv(StringIO(data), comment='#', skiprows=2)
 
 The parsers make every attempt to "do the right thing" and not be very
 fragile. Type inference is a pretty big deal. So if a column can be coerced to
@@ -1969,7 +1996,7 @@ Excel writer engines
 By default, ``pandas`` uses the `XlsxWriter`_  for ``.xlsx`` and `openpyxl`_
 for ``.xlsm`` files and `xlwt`_ for ``.xls`` files.  If you have multiple
 engines installed, you can set the default engine through :ref:`setting the
-config options <basics.working_with_options>` ``io.excel.xlsx.writer`` and
+config options <options>` ``io.excel.xlsx.writer`` and
 ``io.excel.xls.writer``. pandas will fall back on `openpyxl`_ for ``.xlsx``
 files if `Xlsxwriter`_ is not available.
 
@@ -2911,6 +2938,8 @@ Furthermore ``ptrepack in.h5 out.h5`` will *repack* the file to allow
 you to reuse previously deleted space. Aalternatively, one can simply
 remove the file and write again, or use the ``copy`` method.
 
+.. _io.hdf5-notes:
+
 Notes & Caveats
 ~~~~~~~~~~~~~~~
 
@@ -2933,6 +2962,13 @@ Notes & Caveats
      ``tables``. The sizes of a string based indexing column
      (e.g. *columns* or *minor_axis*) are determined as the maximum size
      of the elements in that axis or by passing the parameter
+   - Be aware that timezones (e.g., ``pytz.timezone('US/Eastern')``)
+     are not necessarily equal across timezone versions.  So if data is
+     localized to a specific timezone in the HDFStore using one version
+     of a timezone library and that data is updated with another version, the data
+     will be converted to UTC since these timezones are not considered
+     equal.  Either use the same version of timezone library or use ``tz_convert`` with
+     the updated timezone definition.
 
 .. warning::
 
@@ -3373,83 +3409,80 @@ Google BigQuery (Experimental)
 The :mod:`pandas.io.gbq` module provides a wrapper for Google's BigQuery
 analytics web service to simplify retrieving results from BigQuery tables
 using SQL-like queries. Result sets are parsed into a pandas
-DataFrame with a shape derived from the source table. Additionally,
-DataFrames can be uploaded into BigQuery datasets as tables
-if the source datatypes are compatible with BigQuery ones.
+DataFrame with a shape and data types derived from the source table.
+Additionally, DataFrames can be appended to existing BigQuery tables if
+the destination table is the same shape as the DataFrame.
 
 For specifics on the service itself, see `here <https://developers.google.com/bigquery/>`__
 
-As an example, suppose you want to load all data from an existing table
-: `test_dataset.test_table`
-into BigQuery and pull it into a DataFrame.
+As an example, suppose you want to load all data from an existing BigQuery
+table : `test_dataset.test_table` into a DataFrame using the :func:`~pandas.io.read_gbq`
+function.
 
 .. code-block:: python
-
-   from pandas.io import gbq
 
    # Insert your BigQuery Project ID Here
-   # Can be found in the web console, or
-   # using the command line tool `bq ls`
+   # Can be found in the Google web console
    projectid = "xxxxxxxx"
 
-   data_frame = gbq.read_gbq('SELECT * FROM test_dataset.test_table', project_id = projectid)
+   data_frame = pd.read_gbq('SELECT * FROM test_dataset.test_table', project_id = projectid)
 
-The user will then be authenticated by the `bq` command line client -
-this usually involves the default browser opening to a login page,
-though the process can be done entirely from command line if necessary.
-Datasets and additional parameters can be either configured with `bq`,
-passed in as options to `read_gbq`, or set using Google's gflags (this
-is not officially supported by this module, though care was taken
-to ensure that they should be followed regardless of how you call the
-method).
+You will then be authenticated to the specified BigQuery account
+via Google's Oauth2 mechanism. In general, this is as simple as following the
+prompts in a browser window which will be opened for you. Should the browser not
+be available, or fail to launch, a code will be provided to complete the process
+manually.  Additional information on the authentication mechanism can be found
+`here <https://developers.google.com/accounts/docs/OAuth2#clientside/>`__
 
-Additionally, you can define which column to use as an index as well as a preferred column order as follows:
+You can define which column from BigQuery to use as an index in the
+destination DataFrame as well as a preferred column order as follows:
 
 .. code-block:: python
 
-   data_frame = gbq.read_gbq('SELECT * FROM test_dataset.test_table',
+   data_frame = pd.read_gbq('SELECT * FROM test_dataset.test_table',
                              index_col='index_column_name',
-                             col_order='[col1, col2, col3,...]', project_id = projectid)
+                             col_order=['col1', 'col2', 'col3'], project_id = projectid)
 
-Finally, if you would like to create a BigQuery table, `my_dataset.my_table`, from the rows of DataFrame, `df`:
+Finally, you can append data to a BigQuery table from a pandas DataFrame
+using the :func:`~pandas.io.to_gbq` function. This function uses the
+Google streaming API which requires that your destination table exists in
+BigQuery. Given the BigQuery table already exists, your DataFrame should
+match the destination table in column order, structure, and data types.
+DataFrame indexes are not supported. By default, rows are streamed to
+BigQuery in chunks of 10,000 rows, but you can pass other chuck values
+via the ``chunksize`` argument. You can also see the progess of your
+post via the ``verbose`` flag which defaults to ``True``. The http
+response code of Google BigQuery can be successful (200) even if the
+append failed. For this reason, if there is a failure to append to the
+table, the complete error response from BigQuery is returned which
+can be quite long given it provides a status for each row. You may want
+to start with smaller chuncks to test that the size and types of your
+dataframe match your destination table to make debugging simpler.
 
 .. code-block:: python
 
    df = pandas.DataFrame({'string_col_name' : ['hello'],
          'integer_col_name' : [1],
          'boolean_col_name' : [True]})
-   schema = ['STRING', 'INTEGER', 'BOOLEAN']
-   data_frame = gbq.to_gbq(df, 'my_dataset.my_table',
-                           if_exists='fail', schema = schema, project_id = projectid)
+   df.to_gbq('my_dataset.my_table', project_id = projectid)
 
-To add more rows to this, simply:
+The BigQuery SQL query language has some oddities, see `here <https://developers.google.com/bigquery/query-reference>`__
 
-.. code-block:: python
+While BigQuery uses SQL-like syntax, it has some important differences
+from traditional databases both in functionality, API limitations (size and
+qunatity of queries or uploads), and how Google charges for use of the service.
+You should refer to Google documentation often as the service seems to
+be changing and evolving. BiqQuery is best for analyzing large sets of
+data quickly, but it is not a direct replacement for a transactional database.
 
-   df2 = pandas.DataFrame({'string_col_name' : ['hello2'],
-         'integer_col_name' : [2],
-         'boolean_col_name' : [False]})
-   data_frame = gbq.to_gbq(df2, 'my_dataset.my_table', if_exists='append', project_id = projectid)
-
-.. note::
-
-   A default project id can be set using the command line:
-   `bq init`.
-
-   There is a hard cap on BigQuery result sets, at 128MB compressed. Also, the BigQuery SQL query language has some oddities,
-   see `here <https://developers.google.com/bigquery/query-reference>`__
-
-   You can access the management console to determine project id's by:
-   <https://code.google.com/apis/console/b/0/?noredirect>
+You can access the management console to determine project id's by:
+<https://code.google.com/apis/console/b/0/?noredirect>
 
 .. warning::
 
-   To use this module, you will need a BigQuery account. See
-   <https://cloud.google.com/products/big-query> for details.
-
-   As of 1/28/14, a known bug is present that could possibly cause data duplication in the resultant dataframe. A fix is imminent,
-   but any client changes will not make it into 0.13.1. See:
-   http://stackoverflow.com/questions/20984592/bigquery-results-not-including-page-token/21009144?noredirect=1#comment32090677_21009144
+   To use this module, you will need a valid BigQuery account. See
+   <https://cloud.google.com/products/big-query> for details on the
+   service.
 
 .. _io.stata:
 

@@ -909,13 +909,9 @@ class MPLPlot(object):
         pass
 
     def _maybe_right_yaxis(self, ax):
-        _types = (list, tuple, np.ndarray)
-        sec_true = isinstance(self.secondary_y, bool) and self.secondary_y
-        list_sec = isinstance(self.secondary_y, _types)
-        has_sec = list_sec and len(self.secondary_y) > 0
-        all_sec = list_sec and len(self.secondary_y) == self.nseries
-
-        if (sec_true or has_sec) and not hasattr(ax, 'right_ax'):
+        if hasattr(ax, 'right_ax'):
+            return ax.right_ax
+        else:
             orig_ax, new_ax = ax, ax.twinx()
             new_ax._get_lines.color_cycle = orig_ax._get_lines.color_cycle
 
@@ -924,38 +920,25 @@ class MPLPlot(object):
 
             if len(orig_ax.get_lines()) == 0:  # no data on left y
                 orig_ax.get_yaxis().set_visible(False)
-
-            if len(new_ax.get_lines()) == 0:
-                new_ax.get_yaxis().set_visible(False)
-
-            if sec_true or all_sec:
-                ax = new_ax
-        else:
-            ax.get_yaxis().set_visible(True)
-
-        return ax
+            return new_ax
 
     def _setup_subplots(self):
         if self.subplots:
             nrows, ncols = self._get_layout()
             fig, axes = _subplots(nrows=nrows, ncols=ncols,
                                   sharex=self.sharex, sharey=self.sharey,
-                                  figsize=self.figsize, ax=self.ax,
-                                  secondary_y=self.secondary_y,
-                                  data=self.data)
+                                  figsize=self.figsize, ax=self.ax)
             if not com.is_list_like(axes):
                 axes = np.array([axes])
         else:
             if self.ax is None:
                 fig = self.plt.figure(figsize=self.figsize)
                 ax = fig.add_subplot(111)
-                ax = self._maybe_right_yaxis(ax)
             else:
                 fig = self.ax.get_figure()
                 if self.figsize is not None:
                     fig.set_size_inches(self.figsize)
-                ax = self._maybe_right_yaxis(self.ax)
-
+                ax = self.ax
             axes = [ax]
 
         if self.logx or self.loglog:
@@ -1182,14 +1165,21 @@ class MPLPlot(object):
         # get the twinx ax if appropriate
         if self.subplots:
             ax = self.axes[i]
+
+            if self.on_right(i):
+                ax = self._maybe_right_yaxis(ax)
+                self.axes[i] = ax
         else:
             ax = self.axes[0]
 
-        if self.on_right(i):
-            if hasattr(ax, 'right_ax'):
-                ax = ax.right_ax
-        elif hasattr(ax, 'left_ax'):
-            ax = ax.left_ax
+            if self.on_right(i):
+                ax = self._maybe_right_yaxis(ax)
+
+                sec_true = isinstance(self.secondary_y, bool) and self.secondary_y
+                all_sec = (com.is_list_like(self.secondary_y) and
+                           len(self.secondary_y) == self.nseries)
+                if sec_true or all_sec:
+                    self.axes[0] = ax
 
         ax.get_yaxis().set_visible(True)
         return ax
@@ -1550,8 +1540,6 @@ class LinePlot(MPLPlot):
             data = self._maybe_convert_index(self.data)
             self._make_ts_plot(data)
         else:
-            from pandas.core.frame import DataFrame
-            lines = []
             x = self._get_xticks(convert_period=True)
 
             plotf = self._get_plot_function()
@@ -1586,15 +1574,13 @@ class LinePlot(MPLPlot):
                 newlines = plotf(*args, **kwds)
                 self._add_legend_handle(newlines[0], label, index=i)
 
-                lines.append(newlines[0])
-
                 if self.stacked and not self.subplots:
                     if (y >= 0).all():
                         self._pos_prior += y
                     elif (y <= 0).all():
                         self._neg_prior += y
 
-            if self._is_datetype():
+                lines = _get_all_lines(ax)
                 left, right = _get_xlim(lines)
                 ax.set_xlim(left, right)
 
@@ -1765,7 +1751,9 @@ class AreaPlot(LinePlot):
         else:
             if self.xlim is None:
                 for ax in self.axes:
-                    ax.set_xlim(0, len(self.data)-1)
+                    lines = _get_all_lines(ax)
+                    left, right = _get_xlim(lines)
+                    ax.set_xlim(left, right)
 
         if self.ylim is None:
             if (self.data >= 0).all().all():
@@ -1784,9 +1772,10 @@ class BarPlot(MPLPlot):
         self.stacked = kwargs.pop('stacked', False)
 
         self.bar_width = kwargs.pop('width', 0.5)
+
         pos = kwargs.pop('position', 0.5)
 
-        kwargs['align'] = kwargs.pop('align', 'center')
+        kwargs.setdefault('align', 'center')
         self.tick_pos = np.arange(len(data))
 
         self.bottom = kwargs.pop('bottom', None)
@@ -1797,14 +1786,19 @@ class BarPlot(MPLPlot):
 
         if self.stacked or self.subplots:
             self.tickoffset = self.bar_width * pos
-        elif kwargs['align'] == 'edge':
-            K = self.nseries
-            w = self.bar_width / K
-            self.tickoffset = self.bar_width * (pos - 0.5) + w * 1.5
+            if kwargs['align'] == 'edge':
+                self.lim_offset = self.bar_width / 2
+            else:
+                self.lim_offset = 0
         else:
-            K = self.nseries
-            w = self.bar_width / K
-            self.tickoffset = self.bar_width * pos + w
+            if kwargs['align'] == 'edge':
+                w = self.bar_width / self.nseries
+                self.tickoffset = self.bar_width * (pos - 0.5) + w * 0.5
+                self.lim_offset = w * 0.5
+            else:
+                self.tickoffset = self.bar_width * pos
+                self.lim_offset = 0
+
         self.ax_pos = self.tick_pos - self.tickoffset
 
     def _args_adjust(self):
@@ -1881,9 +1875,8 @@ class BarPlot(MPLPlot):
                 neg_prior = neg_prior + np.where(mask, 0, y)
             else:
                 w = self.bar_width / K
-                rect = bar_f(ax, self.ax_pos + (i + 1.5) * w, y, w,
+                rect = bar_f(ax, self.ax_pos + (i + 0.5) * w, y, w,
                              start=start, label=label, **kwds)
-
             self._add_legend_handle(rect, label, index=i)
 
     def _post_plot_logic(self):
@@ -1894,8 +1887,12 @@ class BarPlot(MPLPlot):
                 str_index = [com.pprint_thing(key) for key in
                              range(self.data.shape[0])]
             name = self._get_index_name()
+
+            s_edge = self.ax_pos[0] - 0.25 + self.lim_offset
+            e_edge = self.ax_pos[-1] + 0.25 + self.bar_width + self.lim_offset
+
             if self.kind == 'bar':
-                ax.set_xlim([self.ax_pos[0] - 0.25, self.ax_pos[-1] + 1])
+                ax.set_xlim((s_edge, e_edge))
                 ax.set_xticks(self.tick_pos)
                 ax.set_xticklabels(str_index, rotation=self.rot,
                                    fontsize=self.fontsize)
@@ -1905,7 +1902,7 @@ class BarPlot(MPLPlot):
                     ax.set_xlabel(name)
             elif self.kind == 'barh':
                 # horizontal bars
-                ax.set_ylim([self.ax_pos[0] - 0.25, self.ax_pos[-1] + 1])
+                ax.set_ylim((s_edge, e_edge))
                 ax.set_yticks(self.tick_pos)
                 ax.set_yticklabels(str_index, rotation=self.rot,
                                    fontsize=self.fontsize)
@@ -1914,9 +1911,6 @@ class BarPlot(MPLPlot):
                     ax.set_ylabel(name)
             else:
                 raise NotImplementedError(self.kind)
-
-        # if self.subplots and self.legend:
-        #    self.axes[0].legend(loc='best')
 
 
 class PiePlot(MPLPlot):
@@ -2073,6 +2067,10 @@ def plot_frame(frame=None, x=None, y=None, subplots=False, sharex=True,
     position : float
         Specify relative alignments for bar plot layout.
         From 0 (left/bottom-end) to 1 (right/top-end). Default is 0.5 (center)
+    table : boolean, Series or DataFrame, default False
+        If True, draw a table using the data in the DataFrame and the data will
+        be transposed to meet matplotlib's default layout.
+        If a Series or DataFrame is passed, use passed data to draw a table.
     kwds : keywords
         Options to pass to matplotlib plotting method
 
@@ -2216,6 +2214,10 @@ def plot_series(series, label=None, kind='line', use_index=True, rot=None,
     position : float
         Specify relative alignments for bar plot layout.
         From 0 (left/bottom-end) to 1 (right/top-end). Default is 0.5 (center)
+    table : boolean, Series or DataFrame, default False
+        If True, draw a table using the data in the Series and the data will
+        be transposed to meet matplotlib's default layout.
+        If a Series or DataFrame is passed, use passed data to draw a table.
     kwds : keywords
         Options to pass to matplotlib plotting method
 
@@ -2243,14 +2245,7 @@ def plot_series(series, label=None, kind='line', use_index=True, rot=None,
     import matplotlib.pyplot as plt
     if ax is None and len(plt.get_fignums()) > 0:
         ax = _gca()
-        if ax.get_yaxis().get_ticks_position().strip().lower() == 'right':
-            fig = _gcf()
-            axes = fig.get_axes()
-            for i in reversed(range(len(axes))):
-                ax = axes[i]
-                ypos = ax.get_yaxis().get_ticks_position().strip().lower()
-                if ypos == 'left':
-                    break
+        ax = getattr(ax, 'left_ax', ax)
 
     # is there harm in this?
     if label is None:
@@ -2323,12 +2318,10 @@ def boxplot(data, column=None, by=None, ax=None, fontsize=None,
     if return_type not in valid_types:
         raise ValueError("return_type")
 
-
     from pandas import Series, DataFrame
     if isinstance(data, Series):
         data = DataFrame({'x': data})
         column = 'x'
-
 
     def _get_colors():
         return _get_standard_colors(color=kwds.get('color'), num_colors=1)
@@ -2340,8 +2333,9 @@ def boxplot(data, column=None, by=None, ax=None, fontsize=None,
             setp(bp['whiskers'],color=colors[0],alpha=1)
             setp(bp['medians'],color=colors[2],alpha=1)
 
-    def plot_group(grouped, ax):
-        keys, values = zip(*grouped)
+    BP = namedtuple("Boxplot", ['ax', 'lines'])  # namedtuple to hold results
+
+    def plot_group(keys, values, ax):
         keys = [com.pprint_thing(x) for x in keys]
         values = [remove_na(v) for v in values]
         bp = ax.boxplot(values, **kwds)
@@ -2350,7 +2344,14 @@ def boxplot(data, column=None, by=None, ax=None, fontsize=None,
         else:
             ax.set_yticklabels(keys, rotation=rot, fontsize=fontsize)
         maybe_color_bp(bp)
-        return bp
+
+        # Return axes in multiplot case, maybe revisit later # 985
+        if return_type == 'dict':
+            return bp
+        elif return_type == 'both':
+            return BP(ax=ax, lines=bp)
+        else:
+            return ax
 
     colors = _get_colors()
     if column is None:
@@ -2361,56 +2362,14 @@ def boxplot(data, column=None, by=None, ax=None, fontsize=None,
         else:
             columns = [column]
 
-    BP = namedtuple("Boxplot", ['ax', 'lines'])  # namedtuple to hold results
-
     if by is not None:
-        fig, axes, d = _grouped_plot_by_column(plot_group, data, columns=columns,
-                                               by=by, grid=grid, figsize=figsize,
-                                               ax=ax, layout=layout)
-
-        # Return axes in multiplot case, maybe revisit later # 985
-        if return_type is None:
-            ret = axes
-        if return_type == 'axes':
-            ret = compat.OrderedDict()
-            axes = _flatten(axes)[:len(d)]
-            for k, ax in zip(d.keys(), axes):
-                ret[k] = ax
-        elif return_type == 'dict':
-            ret = d
-        elif return_type == 'both':
-            ret = compat.OrderedDict()
-            axes = _flatten(axes)[:len(d)]
-            for (k, line), ax in zip(d.items(), axes):
-                ret[k] = BP(ax=ax, lines=line)
+        result = _grouped_plot_by_column(plot_group, data, columns=columns,
+                                         by=by, grid=grid, figsize=figsize,
+                                         ax=ax, layout=layout, return_type=return_type)
     else:
         if layout is not None:
             raise ValueError("The 'layout' keyword is not supported when "
                              "'by' is None")
-        if ax is None:
-            ax = _gca()
-        fig = ax.get_figure()
-        data = data._get_numeric_data()
-        if columns:
-            cols = columns
-        else:
-            cols = data.columns
-        keys = [com.pprint_thing(x) for x in cols]
-
-        # Return boxplot dict in single plot case
-
-        clean_values = [remove_na(x) for x in data[cols].values.T]
-
-        bp = ax.boxplot(clean_values, **kwds)
-        maybe_color_bp(bp)
-
-        if kwds.get('vert', 1):
-            ax.set_xticklabels(keys, rotation=rot, fontsize=fontsize)
-        else:
-            ax.set_yticklabels(keys, rotation=rot, fontsize=fontsize)
-        ax.grid(grid)
-
-        ret = ax
 
         if return_type is None:
             msg = ("\nThe default value for 'return_type' will change to "
@@ -2420,13 +2379,18 @@ def boxplot(data, column=None, by=None, ax=None, fontsize=None,
                    "return_type='dict'.")
             warnings.warn(msg, FutureWarning)
             return_type = 'dict'
-        if return_type == 'dict':
-            ret = bp
-        elif return_type == 'both':
-            ret = BP(ax=ret, lines=bp)
+        if ax is None:
+            ax = _gca()
+        data = data._get_numeric_data()
+        if columns is None:
+            columns = data.columns
+        else:
+            data = data[columns]
 
-    fig.subplots_adjust(bottom=0.15, top=0.9, left=0.1, right=0.9, wspace=0.2)
-    return ret
+        result = plot_group(columns, data.values.T, ax)
+        ax.grid(grid)
+
+    return result
 
 
 def format_date_labels(ax, rot):
@@ -2522,23 +2486,12 @@ def hist_frame(data, column=None, by=None, grid=True, xlabelsize=None,
     kwds : other plotting keyword arguments
         To be passed to hist function
     """
-    import matplotlib.pyplot as plt
 
     if by is not None:
         axes = grouped_hist(data, column=column, by=by, ax=ax, grid=grid, figsize=figsize,
                             sharex=sharex, sharey=sharey, layout=layout, bins=bins,
+                            xlabelsize=xlabelsize, xrot=xrot, ylabelsize=ylabelsize, yrot=yrot,
                             **kwds)
-
-        for ax in axes.ravel():
-            if xlabelsize is not None:
-                plt.setp(ax.get_xticklabels(), fontsize=xlabelsize)
-            if xrot is not None:
-                plt.setp(ax.get_xticklabels(), rotation=xrot)
-            if ylabelsize is not None:
-                plt.setp(ax.get_yticklabels(), fontsize=ylabelsize)
-            if yrot is not None:
-                plt.setp(ax.get_yticklabels(), rotation=yrot)
-
         return axes
 
     if column is not None:
@@ -2554,21 +2507,12 @@ def hist_frame(data, column=None, by=None, grid=True, xlabelsize=None,
 
     for i, col in enumerate(com._try_sort(data.columns)):
         ax = axes[i // ncols, i % ncols]
-        ax.xaxis.set_visible(True)
-        ax.yaxis.set_visible(True)
         ax.hist(data[col].dropna().values, bins=bins, **kwds)
         ax.set_title(col)
         ax.grid(grid)
 
-        if xlabelsize is not None:
-            plt.setp(ax.get_xticklabels(), fontsize=xlabelsize)
-        if xrot is not None:
-            plt.setp(ax.get_xticklabels(), rotation=xrot)
-        if ylabelsize is not None:
-            plt.setp(ax.get_yticklabels(), fontsize=ylabelsize)
-        if yrot is not None:
-            plt.setp(ax.get_yticklabels(), rotation=yrot)
-
+    _set_ticks_props(axes, xlabelsize=xlabelsize, xrot=xrot,
+             ylabelsize=ylabelsize, yrot=yrot)
     fig.subplots_adjust(wspace=0.3, hspace=0.3)
 
     return axes
@@ -2628,23 +2572,18 @@ def hist_series(self, by=None, ax=None, grid=True, xlabelsize=None,
         ax.hist(values, bins=bins, **kwds)
         ax.grid(grid)
         axes = np.array([ax])
+
+        _set_ticks_props(axes, xlabelsize=xlabelsize, xrot=xrot,
+                 ylabelsize=ylabelsize, yrot=yrot)
+
     else:
         if 'figure' in kwds:
             raise ValueError("Cannot pass 'figure' when using the "
                              "'by' argument, since a new 'Figure' instance "
                              "will be created")
-        axes = grouped_hist(self, by=by, ax=ax, grid=grid, figsize=figsize,
-                            bins=bins, **kwds)
-
-    for ax in axes.ravel():
-        if xlabelsize is not None:
-            plt.setp(ax.get_xticklabels(), fontsize=xlabelsize)
-        if xrot is not None:
-            plt.setp(ax.get_xticklabels(), rotation=xrot)
-        if ylabelsize is not None:
-            plt.setp(ax.get_yticklabels(), fontsize=ylabelsize)
-        if yrot is not None:
-            plt.setp(ax.get_yticklabels(), rotation=yrot)
+        axes = grouped_hist(self, by=by, ax=ax, grid=grid, figsize=figsize, bins=bins,
+                            xlabelsize=xlabelsize, xrot=xrot, ylabelsize=ylabelsize, yrot=yrot,
+                            **kwds)
 
     if axes.ndim == 1 and len(axes) == 1:
         return axes[0]
@@ -2653,6 +2592,7 @@ def hist_series(self, by=None, ax=None, grid=True, xlabelsize=None,
 
 def grouped_hist(data, column=None, by=None, ax=None, bins=50, figsize=None,
                  layout=None, sharex=False, sharey=False, rot=90, grid=True,
+                 xlabelsize=None, xrot=None, ylabelsize=None, yrot=None,
                  **kwargs):
     """
     Grouped histogram
@@ -2679,16 +2619,23 @@ def grouped_hist(data, column=None, by=None, ax=None, bins=50, figsize=None,
     def plot_group(group, ax):
         ax.hist(group.dropna().values, bins=bins, **kwargs)
 
+    xrot = xrot or rot
+
     fig, axes = _grouped_plot(plot_group, data, column=column,
                               by=by, sharex=sharex, sharey=sharey,
                               figsize=figsize, layout=layout, rot=rot)
+
+    _set_ticks_props(axes, xlabelsize=xlabelsize, xrot=xrot,
+             ylabelsize=ylabelsize, yrot=yrot)
+
     fig.subplots_adjust(bottom=0.15, top=0.9, left=0.1, right=0.9,
                         hspace=0.5, wspace=0.3)
     return axes
 
 
 def boxplot_frame_groupby(grouped, subplots=True, column=None, fontsize=None,
-                          rot=0, grid=True, figsize=None, layout=None, **kwds):
+                          rot=0, grid=True, ax=None, figsize=None,
+                          layout=None, **kwds):
     """
     Make box plots from DataFrameGroupBy data.
 
@@ -2734,8 +2681,8 @@ def boxplot_frame_groupby(grouped, subplots=True, column=None, fontsize=None,
     if subplots is True:
         naxes = len(grouped)
         nrows, ncols = _get_layout(naxes, layout=layout)
-        _, axes = _subplots(nrows=nrows, ncols=ncols, naxes=naxes, squeeze=False,
-                            sharex=False, sharey=True)
+        fig, axes = _subplots(nrows=nrows, ncols=ncols, naxes=naxes, squeeze=False,
+                              ax=ax, sharex=False, sharey=True, figsize=figsize)
         axes = _flatten(axes)
 
         ret = compat.OrderedDict()
@@ -2744,6 +2691,7 @@ def boxplot_frame_groupby(grouped, subplots=True, column=None, fontsize=None,
                               rot=rot, grid=grid, **kwds)
             ax.set_title(com.pprint_thing(key))
             ret[key] = d
+        fig.subplots_adjust(bottom=0.15, top=0.9, left=0.1, right=0.9, wspace=0.2)
     else:
         from pandas.tools.merge import concat
         keys, frames = zip(*grouped)
@@ -2755,7 +2703,7 @@ def boxplot_frame_groupby(grouped, subplots=True, column=None, fontsize=None,
             else:
                 df = frames[0]
         ret = df.boxplot(column=column, fontsize=fontsize, rot=rot,
-                         grid=grid, figsize=figsize, layout=layout, **kwds)
+                         grid=grid, ax=ax, figsize=figsize, layout=layout, **kwds)
     return ret
 
 
@@ -2764,9 +2712,11 @@ def _grouped_plot(plotf, data, column=None, by=None, numeric_only=True,
                   rot=0, ax=None, **kwargs):
     from pandas import DataFrame
 
-    # allow to specify mpl default with 'default'
-    if figsize is None or figsize == 'default':
-        figsize = (10, 5)               # our default
+    if figsize == 'default':
+        # allowed to specify mpl default with 'default'
+        warnings.warn("figsize='default' is deprecated. Specify figure"
+                      "size by tuple instead", FutureWarning)
+        figsize = None
 
     grouped = data.groupby(by)
     if column is not None:
@@ -2774,10 +2724,6 @@ def _grouped_plot(plotf, data, column=None, by=None, numeric_only=True,
 
     naxes = len(grouped)
     nrows, ncols = _get_layout(naxes, layout=layout)
-    if figsize is None:
-        # our favorite default beating matplotlib's idea of the
-        # default size
-        figsize = (10, 5)
     fig, axes = _subplots(nrows=nrows, ncols=ncols, naxes=naxes,
                           figsize=figsize, sharex=sharex, sharey=sharey, ax=ax)
 
@@ -2795,43 +2741,41 @@ def _grouped_plot(plotf, data, column=None, by=None, numeric_only=True,
 
 def _grouped_plot_by_column(plotf, data, columns=None, by=None,
                             numeric_only=True, grid=False,
-                            figsize=None, ax=None, layout=None, **kwargs):
-    from pandas.core.frame import DataFrame
-
+                            figsize=None, ax=None, layout=None, return_type=None,
+                            **kwargs):
     grouped = data.groupby(by)
     if columns is None:
         if not isinstance(by, (list, tuple)):
             by = [by]
         columns = data._get_numeric_data().columns - by
     naxes = len(columns)
-
-    if ax is None:
-        nrows, ncols = _get_layout(naxes, layout=layout)
-        fig, axes = _subplots(nrows=nrows, ncols=ncols, naxes=naxes,
-                              sharex=True, sharey=True,
-                              figsize=figsize, ax=ax)
-    else:
-        if naxes > 1:
-            raise ValueError("Using an existing axis is not supported when plotting multiple columns.")
-        fig = ax.get_figure()
-        axes = ax.get_axes()
+    nrows, ncols = _get_layout(naxes, layout=layout)
+    fig, axes = _subplots(nrows=nrows, ncols=ncols, naxes=naxes,
+                          sharex=True, sharey=True,
+                          figsize=figsize, ax=ax)
 
     ravel_axes = _flatten(axes)
 
-    out_dict = compat.OrderedDict()
+    result = compat.OrderedDict()
     for i, col in enumerate(columns):
         ax = ravel_axes[i]
         gp_col = grouped[col]
-        re_plotf = plotf(gp_col, ax, **kwargs)
+        keys, values = zip(*gp_col)
+        re_plotf = plotf(keys, values, ax, **kwargs)
         ax.set_title(col)
         ax.set_xlabel(com.pprint_thing(by))
+        result[col] = re_plotf
         ax.grid(grid)
-        out_dict[col] = re_plotf
+
+    # Return axes in multiplot case, maybe revisit later # 985
+    if return_type is None:
+        result = axes
 
     byline = by[0] if len(by) == 1 else by
     fig.suptitle('Boxplot grouped by %s' % byline)
+    fig.subplots_adjust(bottom=0.15, top=0.9, left=0.1, right=0.9, wspace=0.2)
 
-    return fig, axes, out_dict
+    return result
 
 
 def table(ax, data, rowLabels=None, colLabels=None,
@@ -2859,7 +2803,7 @@ def table(ax, data, rowLabels=None, colLabels=None,
     elif isinstance(data, DataFrame):
         pass
     else:
-        raise ValueError('Input data must be dataframe or series')
+        raise ValueError('Input data must be DataFrame or Series')
 
     if rowLabels is None:
         rowLabels = data.index
@@ -2907,8 +2851,7 @@ def _get_layout(nplots, layout=None):
 
 
 def _subplots(nrows=1, ncols=1, naxes=None, sharex=False, sharey=False, squeeze=True,
-              subplot_kw=None, ax=None, secondary_y=False, data=None,
-              **fig_kw):
+              subplot_kw=None, ax=None, **fig_kw):
     """Create a figure with a set of subplots already made.
 
     This utility wrapper makes it convenient to create common layouts of
@@ -2949,12 +2892,6 @@ def _subplots(nrows=1, ncols=1, naxes=None, sharex=False, sharey=False, squeeze=
 
     ax : Matplotlib axis object, optional
 
-    secondary_y : boolean or sequence of ints, default False
-        If True then y-axis will be on the right
-
-    data : DataFrame, optional
-        If secondary_y is a sequence, data is used to select columns.
-
     fig_kw : Other keyword arguments to be passed to the figure() call.
         Note that all keywords not recognized above will be
         automatically included here.
@@ -2993,12 +2930,6 @@ def _subplots(nrows=1, ncols=1, naxes=None, sharex=False, sharey=False, squeeze=
     if subplot_kw is None:
         subplot_kw = {}
 
-    if ax is None:
-        fig = plt.figure(**fig_kw)
-    else:
-        fig = ax.get_figure()
-        fig.clear()
-
     # Create empty object array to hold all axes.  It's easiest to make it 1-d
     # so we can just append subplots upon creation, and then
     nplots = nrows * ncols
@@ -3008,24 +2939,25 @@ def _subplots(nrows=1, ncols=1, naxes=None, sharex=False, sharey=False, squeeze=
     elif nplots < naxes:
         raise ValueError("naxes {0} is larger than layour size defined by nrows * ncols".format(naxes))
 
-    axarr = np.empty(nplots, dtype=object)
+    if ax is None:
+        fig = plt.figure(**fig_kw)
+    else:
+        fig = ax.get_figure()
+         # if ax is passed and a number of subplots is 1, return ax as it is
+        if naxes == 1:
+            if squeeze:
+                return fig, ax
+            else:
+                return fig, _flatten(ax)
+        else:
+            warnings.warn("To output multiple subplots, the figure containing the passed axes "
+                          "is being cleared", UserWarning)
+            fig.clear()
 
-    def on_right(i):
-        if isinstance(secondary_y, bool):
-            return secondary_y
-        if isinstance(data, DataFrame):
-            return data.columns[i] in secondary_y
+    axarr = np.empty(nplots, dtype=object)
 
     # Create first subplot separately, so we can share it if requested
     ax0 = fig.add_subplot(nrows, ncols, 1, **subplot_kw)
-    if on_right(0):
-        orig_ax = ax0
-        ax0 = ax0.twinx()
-        ax0._get_lines.color_cycle = orig_ax._get_lines.color_cycle
-
-        orig_ax.get_yaxis().set_visible(False)
-        orig_ax.right_ax = ax0
-        ax0.left_ax = orig_ax
 
     if sharex:
         subplot_kw['sharex'] = ax0
@@ -3037,25 +2969,20 @@ def _subplots(nrows=1, ncols=1, naxes=None, sharex=False, sharey=False, squeeze=
     # convention.
     for i in range(1, nplots):
         ax = fig.add_subplot(nrows, ncols, i + 1, **subplot_kw)
-        if on_right(i):
-            orig_ax = ax
-            ax = ax.twinx()
-            ax._get_lines.color_cycle = orig_ax._get_lines.color_cycle
-
-            orig_ax.get_yaxis().set_visible(False)
         axarr[i] = ax
 
     if nplots > 1:
         if sharex and nrows > 1:
-            for i, ax in enumerate(axarr):
-                if np.ceil(float(i + 1) / ncols) < nrows:  # only last row
-                    [label.set_visible(
-                        False) for label in ax.get_xticklabels()]
+            for ax in axarr[:naxes][:-ncols]:    # only bottom row
+                for label in ax.get_xticklabels():
+                    label.set_visible(False)
+                ax.xaxis.get_label().set_visible(False)
         if sharey and ncols > 1:
             for i, ax in enumerate(axarr):
                 if (i % ncols) != 0:  # only first column
-                    [label.set_visible(
-                        False) for label in ax.get_yticklabels()]
+                    for label in ax.get_yticklabels():
+                        label.set_visible(False)
+                    ax.yaxis.get_label().set_visible(False)
 
     if naxes != nplots:
         for ax in axarr[naxes:]:
@@ -3084,22 +3011,43 @@ def _flatten(axes):
     return axes
 
 
+def _get_all_lines(ax):
+    lines = ax.get_lines()
+
+    # check for right_ax, which can oddly sometimes point back to ax
+    if hasattr(ax, 'right_ax') and ax.right_ax != ax:
+        lines += ax.right_ax.get_lines()
+
+    # no such risk with left_ax
+    if hasattr(ax, 'left_ax'):
+        lines += ax.left_ax.get_lines()
+
+    return lines
+
+
 def _get_xlim(lines):
     left, right = np.inf, -np.inf
     for l in lines:
-        x = l.get_xdata()
-        left = min(_maybe_convert_date(x[0]), left)
-        right = max(_maybe_convert_date(x[-1]), right)
+        x = l.get_xdata(orig=False)
+        left = min(x[0], left)
+        right = max(x[-1], right)
     return left, right
 
 
-def _maybe_convert_date(x):
-    if not com.is_integer(x):
-        conv_func = conv._dt_to_float_ordinal
-        if isinstance(x, datetime.time):
-            conv_func = conv._to_ordinalf
-        x = conv_func(x)
-    return x
+def _set_ticks_props(axes, xlabelsize=None, xrot=None,
+                     ylabelsize=None, yrot=None):
+    import matplotlib.pyplot as plt
+
+    for ax in _flatten(axes):
+        if xlabelsize is not None:
+            plt.setp(ax.get_xticklabels(), fontsize=xlabelsize)
+        if xrot is not None:
+            plt.setp(ax.get_xticklabels(), rotation=xrot)
+        if ylabelsize is not None:
+            plt.setp(ax.get_yticklabels(), fontsize=ylabelsize)
+        if yrot is not None:
+            plt.setp(ax.get_yticklabels(), rotation=yrot)
+    return axes
 
 
 if __name__ == '__main__':

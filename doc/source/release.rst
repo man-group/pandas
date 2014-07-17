@@ -48,18 +48,73 @@ analysis / manipulation tool available in any language.
 pandas 0.14.1
 -------------
 
-**Release date:** (????)
+**Release date:** (July 11, 2014)
 
-This is a minor release from 0.14.0 and includes a number of API changes, several new features, enhancements, and
+This is a minor release from 0.14.0 and includes a small number of API changes, several new features, enhancements, and
 performance improvements along with a large number of bug fixes.
 
 Highlights include:
+
+- New methods :meth:`~pandas.DataFrame.select_dtypes` to select columns
+  based on the dtype and :meth:`~pandas.Series.sem` to calculate the
+  standard error of the mean.
+- Support for dateutil timezones (see :ref:`docs <timeseries.timezone>`).
+- Support for ignoring full line comments in the :func:`~pandas.read_csv`
+  text parser.
+- New documentation section on :ref:`Options and Settings <options>`.
+- Lots of bug fixes.
 
 See the :ref:`v0.14.1 Whatsnew <whatsnew_0141>` overview or the issue tracker on GitHub for an extensive list
 of all API changes, enhancements and bugs that have been fixed in 0.14.1.
 
 Thanks
 ~~~~~~
+
+- Andrew Rosenfeld
+- Andy Hayden
+- Benjamin Adams
+- Benjamin M. Gross
+- Brian Quistorff
+- Brian Wignall
+- bwignall
+- clham
+- Daniel Waeber
+- David Bew
+- David Stephens
+- DSM
+- dsm054
+- helger
+- immerrr
+- Jacob Schaer
+- jaimefrio
+- Jan Schulz
+- John David Reaver
+- John W. O'Brien
+- Joris Van den Bossche
+- jreback
+- Julien Danjou
+- Kevin Sheppard
+- K.-Michael Aye
+- Kyle Meyer
+- lexual
+- Matthew Brett
+- Matt Wittmann
+- Michael Mueller
+- Mortada Mehyar
+- onesandzeroes
+- Phillip Cloud
+- Rob Levy
+- rockg
+- sanguineturtle
+- Schaer, Jacob C
+- seth-p
+- sinhrks
+- Stephan Hoyer
+- Thomas Kluyver
+- Todd Jennings
+- TomAugspurger
+- unknown
+- yelite
 
 pandas 0.14.0
 -------------

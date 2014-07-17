@@ -576,7 +576,7 @@ def maybe_indices_to_slice(ndarray[int64_t] indices):
     cdef:
         Py_ssize_t i, n = len(indices)
 
-    if n == 0:
+    if not n or indices[0] < 0:
         return indices
 
     for i in range(1, n):
@@ -958,15 +958,21 @@ def is_lexsorted(list list_of_arrays):
 @cython.boundscheck(False)
 @cython.wraparound(False)
 def generate_bins_dt64(ndarray[int64_t] values, ndarray[int64_t] binner,
-                       object closed='left'):
+                       object closed='left', bint hasnans=0):
     """
     Int64 (datetime64) version of generic python version in groupby.py
     """
     cdef:
         Py_ssize_t lenidx, lenbin, i, j, bc, vc
         ndarray[int64_t] bins
-        int64_t l_bin, r_bin
+        int64_t l_bin, r_bin, nat_count
         bint right_closed = closed == 'right'
+
+    nat_count = 0
+    if hasnans:
+        mask = values == iNaT
+        nat_count = np.sum(mask)
+        values = values[~mask]
 
     lenidx = len(values)
     lenbin = len(binner)
@@ -981,23 +987,33 @@ def generate_bins_dt64(ndarray[int64_t] values, ndarray[int64_t] binner,
     if values[lenidx-1] > binner[lenbin-1]:
         raise ValueError("Values falls after last bin")
 
-    bins   = np.empty(lenbin - 1, dtype=np.int64)
+    bins = np.empty(lenbin - 1, dtype=np.int64)
 
     j  = 0 # index into values
     bc = 0 # bin count
 
     # linear scan
-    for i in range(0, lenbin - 1):
-        l_bin = binner[i]
-        r_bin = binner[i+1]
+    if right_closed:
+        for i in range(0, lenbin - 1):
+            r_bin = binner[i+1]
+            # count values in current bin, advance to next bin
+            while j < lenidx and values[j] <= r_bin:
+                j += 1
+            bins[bc] = j
+            bc += 1
+    else:
+        for i in range(0, lenbin - 1):
+            r_bin = binner[i+1]
+            # count values in current bin, advance to next bin
+            while j < lenidx and values[j] < r_bin:
+                j += 1
+            bins[bc] = j
+            bc += 1
 
-        # count values in current bin, advance to next bin
-        while j < lenidx and (values[j] < r_bin or
-                              (right_closed and values[j] == r_bin)):
-            j += 1
-
-        bins[bc] = j
-        bc += 1
+    if nat_count > 0:
+        # shift bins by the number of NaT
+        bins = bins + nat_count
+        bins = np.insert(bins, 0, nat_count)
 
     return bins
 

@@ -80,25 +80,6 @@ def has_expanded_repr(df):
             return True
     return False
 
-def skip_if_np_version_under1p7():
-    if _np_version_under1p7:
-        import nose
-
-        raise nose.SkipTest('numpy >= 1.7 required')
-
-def _skip_if_no_pytz():
-    try:
-        import pytz
-    except ImportError:
-        raise nose.SkipTest("pytz not installed")
-
-def _skip_if_no_dateutil():
-    try:
-        import dateutil
-    except ImportError:
-        raise nose.SkipTest("dateutil not installed")
-
-
 class TestDataFrameFormatting(tm.TestCase):
     _multiprocess_can_split_ = True
 
@@ -2748,7 +2729,7 @@ class TestFloatArrayFormatter(tm.TestCase):
 class TestRepr_timedelta64(tm.TestCase):
     @classmethod
     def setUpClass(cls):
-        skip_if_np_version_under1p7()
+        tm._skip_if_not_numpy17_friendly()
 
     def test_legacy(self):
         delta_1d = pd.to_timedelta(1, unit='D')
@@ -2796,7 +2777,7 @@ class TestRepr_timedelta64(tm.TestCase):
 class TestTimedelta64Formatter(tm.TestCase):
     @classmethod
     def setUpClass(cls):
-        skip_if_np_version_under1p7()
+        tm._skip_if_not_numpy17_friendly()
 
     def test_mixed(self):
         x = pd.to_timedelta(list(range(5)) + [pd.NaT], unit='D')
@@ -2930,7 +2911,7 @@ class TestStringRepTimestamp(tm.TestCase):
         self.assertEqual(str(ts_nanos_micros), "1970-01-01 00:00:00.000001200")
 
     def test_tz_pytz(self):
-        _skip_if_no_pytz()
+        tm._skip_if_no_pytz()
 
         import pytz
 
@@ -2944,9 +2925,9 @@ class TestStringRepTimestamp(tm.TestCase):
         self.assertEqual(str(dt_datetime_us), str(Timestamp(dt_datetime_us)))
 
     def test_tz_dateutil(self):
-        _skip_if_no_dateutil()
+        tm._skip_if_no_dateutil()
         import dateutil
-        utc = dateutil.tz.gettz('UTC')
+        utc = dateutil.tz.tzutc()
 
         dt_date = datetime(2013, 1, 2, tzinfo=utc)
         self.assertEqual(str(dt_date), str(Timestamp(dt_date)))
