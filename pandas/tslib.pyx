@@ -132,6 +132,7 @@ def ints_to_pydatetime(ndarray[int64_t] arr, tz=None):
 
     return result
 
+
 cdef inline bint _is_tzlocal(object tz):
     return isinstance(tz, _dateutil_tzlocal)
 
@@ -1842,7 +1843,6 @@ def i8_to_pydt(int64_t i8, object tzinfo = None):
 #----------------------------------------------------------------------
 # time zone conversion helpers
 
-#    from dateutil.tz import tzutc as _du_utc
 try:
     import pytz
     UTC = pytz.utc
